@@ -200,6 +200,8 @@ class FirestoreMetadata implements MetadataStore {
           structurePath: zone.structurePath,
           surfaceColorsPath: zone.surfaceColorsPath,
           surfaceColorAtlasPath: zone.surfaceColorAtlasPath,
+          wifiZonePath: zone.wifiZonePath,
+          accessPoints: zone.accessPoints,
           relocalizationHint: zone.relocalizationHint ?? '',
           startNodeId: zone.startNodeId ?? '',
         }));
@@ -293,9 +295,26 @@ function mapZone(id: string, data: DocumentData): ZoneRecord {
     structurePath: text('structurePath'),
     surfaceColorsPath: text('surfaceColorsPath'),
     surfaceColorAtlasPath: text('surfaceColorAtlasPath'),
+    wifiZonePath: text('wifiZonePath'),
+    accessPoints: mapAccessPoints(data.accessPoints),
     relocalizationHint: text('relocalizationHint'),
     startNodeId: text('startNodeId'),
   };
+}
+
+const BSSID = /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/;
+
+function mapAccessPoints(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const points = value.flatMap(item => {
+    if (!item || typeof item !== 'object') return [];
+    const record = item as { bssid?: unknown; ssid?: unknown };
+    if (typeof record.bssid !== 'string' || !BSSID.test(record.bssid)) return [];
+    return typeof record.ssid === 'string' && record.ssid
+      ? [{ bssid: record.bssid, ssid: record.ssid.slice(0, 32) }]
+      : [{ bssid: record.bssid }];
+  });
+  return points.length ? points : undefined;
 }
 
 function mapFloor(id: string, data: DocumentData): FloorRecord {

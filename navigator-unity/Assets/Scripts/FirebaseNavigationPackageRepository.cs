@@ -173,6 +173,10 @@ public sealed class FirebaseNavigationPackageRepository
             var colorAtlas = Path.Combine(staging, SurfaceColors.AtlasFileName);
             await TryDownloadSignedAsync(FindPackageFile(zone.files, SurfaceColors.JsonFileName), colorJson, SurfaceColors.JsonFileName);
             await TryDownloadSignedAsync(FindPackageFile(zone.files, SurfaceColors.AtlasFileName), colorAtlas, SurfaceColors.AtlasFileName);
+            var wifiFile = Path.Combine(staging, WifiZone.FileName);
+            await TryDownloadSignedAsync(FindPackageFile(zone.files, WifiZone.FileName), wifiFile, WifiZone.FileName);
+            if (File.Exists(wifiFile) && WifiZone.ReadBssids(staging, zoneId).Length == 0)
+                File.Delete(wifiFile);
             if (File.Exists(colorJson) && (SurfaceColors.Parse(File.ReadAllText(colorJson)) == null || !File.Exists(colorAtlas)))
             {
                 File.Delete(colorJson);
@@ -213,10 +217,19 @@ public sealed class FirebaseNavigationPackageRepository
             foreach (var zone in building.zones)
             {
                 if (zone == null || string.IsNullOrEmpty(zone.id)) continue;
-                result.Add(new FirebaseScanChoice(building.id, building.activeVersion, zone.id, building.name, zone.floorId, zone.name));
+                result.Add(new FirebaseScanChoice(
+                    building.id, building.activeVersion, zone.id, building.name, zone.floorId, zone.name, BssidsFrom(zone.accessPoints)));
             }
         }
         return result;
+    }
+
+    static string[] BssidsFrom(LibraryAccessPoint[] points)
+    {
+        if (points == null) return null;
+        var bssids = new string[points.Length];
+        for (var i = 0; i < points.Length; i++) bssids[i] = points[i]?.bssid;
+        return bssids;
     }
 
     public bool TryGetCachedPackage(string buildingId, string zoneId, out DownloadedNavigationPackage package)
@@ -593,6 +606,12 @@ public sealed class FirebaseNavigationPackageRepository
         public string id;
         public string name;
         public string floorId;
+        public LibraryAccessPoint[] accessPoints;
+    }
+    [Serializable] sealed class LibraryAccessPoint
+    {
+        public string bssid;
+        public string ssid;
     }
     [Serializable] sealed class PackageResponse
     {
@@ -687,8 +706,11 @@ public sealed class FirebaseScanChoice
     public string BuildingName { get; }
     public string FloorId { get; }
     public string ZoneName { get; }
+    /// <summary>Null when the library response did not say. An empty list means the zone has no label.</summary>
+    public string[] Bssids { get; }
+
     public FirebaseScanChoice(string buildingId, string versionId, string zoneId,
-        string buildingName = null, string floorId = null, string zoneName = null)
+        string buildingName = null, string floorId = null, string zoneName = null, string[] bssids = null)
     {
         BuildingId = buildingId;
         VersionId = versionId;
@@ -696,6 +718,30 @@ public sealed class FirebaseScanChoice
         BuildingName = buildingName;
         FloorId = floorId;
         ZoneName = ZoneLabels.Known(buildingId, zoneId) ?? zoneName;
+        Bssids = NormalizeBssids(bssids);
+    }
+
+    public bool Claims(string bssid)
+    {
+        if (string.IsNullOrEmpty(bssid) || Bssids == null) return false;
+        for (var i = 0; i < Bssids.Length; i++)
+            if (Bssids[i] == bssid) return true;
+        return false;
+    }
+
+    public FirebaseScanChoice WithBssids(string[] bssids) =>
+        new FirebaseScanChoice(BuildingId, VersionId, ZoneId, BuildingName, FloorId, ZoneName, bssids);
+
+    static string[] NormalizeBssids(string[] bssids)
+    {
+        if (bssids == null) return null;
+        var normalized = new System.Collections.Generic.List<string>();
+        foreach (var raw in bssids)
+        {
+            var bssid = WifiZone.NormalizeBssid(raw);
+            if (bssid != null && !normalized.Contains(bssid)) normalized.Add(bssid);
+        }
+        return normalized.ToArray();
     }
 }
 

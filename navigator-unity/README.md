@@ -49,6 +49,7 @@ All five files are downloaded to `Application.persistentDataPath/navigation-cach
 | `structure.usdz` | Yes | Original RoomPlan building geometry rendered in the expanded iPhone map |
 | `route.json` | No | Fallback polyline if A* has no destination ([schema](../shared/route.schema.json)) |
 | `surface-colors.json` + `.jpg` | No | Real photo colors for the minimap walls, floors, doors and objects ([schema](../shared/surface-colors.schema.json)); downloaded from the zone folder when present |
+| `wifi-zone.json` | No | Access points heard while the zone was mapped ([schema](../shared/wifi-zone.schema.json)). A single matching BSSID skips the floor list |
 | `stairs.json` | No | Separate stair zones, with `prev`/`next` floors and the floor lookup ([schema](../shared/stairs.schema.json)) |
 
 The mapper exports `scan-features.json` and a visibility `building.json`. Record a destination node (for example Room 204) so A* has a goal. `route.json` is only a fallback walk-order path.
@@ -77,7 +78,7 @@ The web editor may also save `buildings/{buildingId}/{versionId}/building-layout
 
 ## Behavior
 
-1. Firebase login and active-package download, or selection of a previously downloaded offline package.
+1. Firebase login and active-package download, or selection of a previously downloaded offline package. If the phone is joined to an access point recorded in exactly one zone's `wifi-zone.json`, that zone opens without the floor list. Several zones sharing the access point, or a network that was never recorded, keep the list. ARKit still finds the position after the map loads.
 2. **Starting camera…** until ARKit tracks.
 3. **Locating…** after the world map is applied, until ARKit reports it has relocalized.
 4. Once located, the **route planner** opens (see below). After you start navigation, Unity draws the A* path in AR. If a local test anchor exists, its cube is also shown. If tracking is lost, the path is hidden until tracking recovers. **Retry** resets the session and reapplies the cached map.

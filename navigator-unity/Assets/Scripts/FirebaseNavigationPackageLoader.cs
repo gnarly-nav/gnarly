@@ -69,7 +69,7 @@ public sealed partial class FirebaseNavigationPackageLoader : MonoBehaviour
                 Debug.LogWarning($"[Gnarly] Could not read cached floor name for {package.ZoneId}: {exception.Message}");
             }
             library.Add(new FirebaseScanChoice(package.BuildingId, package.VersionId, package.ZoneId,
-                floorId: floorId));
+                floorId: floorId, bssids: WifiZone.ReadBssids(package.DirectoryPath, package.ZoneId)));
         }
     }
 
@@ -77,6 +77,7 @@ public sealed partial class FirebaseNavigationPackageLoader : MonoBehaviour
     {
         if (busy) return;
         busy = true;
+        var wifi = WifiZone.CurrentBssidAsync();
         try
         {
             SetStatus("Finding available maps…");
@@ -87,22 +88,74 @@ public sealed partial class FirebaseNavigationPackageLoader : MonoBehaviour
             foreach (var scan in published)
             {
                 var cachedIndex = library.FindIndex(cached => cached.BuildingId == scan.BuildingId && cached.ZoneId == scan.ZoneId);
-                if (cachedIndex >= 0) library[cachedIndex] = scan;
-                else library.Add(scan);
+                var chosen = scan;
+                if (scan.Bssids == null && cachedIndex >= 0)
+                    chosen = scan.WithBssids(library[cachedIndex].Bssids);
+                if (cachedIndex >= 0) library[cachedIndex] = chosen;
+                else library.Add(chosen);
             }
             library = new System.Collections.Generic.List<FirebaseScanChoice>(library);
-            SetStatus(library.Count == 0 ? "No maps have been published yet." : "Choose a floor to continue.");
         }
         catch (Exception exception)
         {
             onlineMapsAvailable = false;
             publishedLibrary = null;
+            Debug.LogWarning($"[Gnarly] Map library unavailable: {exception.Message}");
+        }
+
+        if (!wifi.IsCompleted) SetStatus("Checking building Wi-Fi…");
+        string bssid = null;
+        try { bssid = await wifi; }
+        catch (Exception exception)
+        {
+            Debug.LogWarning($"[Gnarly] Wi-Fi zone check failed: {exception.Message}");
+        }
+        busy = false;
+        ApplyWifiSelection(bssid);
+    }
+
+    /// <summary>
+    /// Opens the one zone whose recorded access point is the network the phone is joined to.
+    /// Several matches, or none, leave the floor list in place. ARKit still finds the position.
+    /// </summary>
+    void ApplyWifiSelection(string bssid)
+    {
+        var count = WifiZone.ClaimCount(library, bssid);
+        var match = count == 1 ? WifiZone.UniqueClaim(library, bssid) : null;
+        if (match != null && StartMatchedZone(match)) return;
+
+        if (count > 1)
+            SetStatus("This Wi-Fi covers more than one map. Choose the floor.");
+        else if (!onlineMapsAvailable)
             SetStatus(library.Count > 0
                 ? "Online maps are unavailable. Your downloaded maps are ready."
                 : "Maps could not be loaded. Check the connection and map access, then retry.");
-            Debug.LogWarning($"[Gnarly] Map library unavailable: {exception.Message}");
+        else if (library.Count == 0)
+            SetStatus("No maps have been published yet.");
+        else if (!string.IsNullOrEmpty(bssid))
+            SetStatus("This Wi-Fi is not labeled on a map yet. Choose the floor.");
+        else
+            SetStatus("Choose a floor to continue.");
+        RefreshUi();
+    }
+
+    bool StartMatchedZone(FirebaseScanChoice scan)
+    {
+        var label = string.IsNullOrEmpty(scan.ZoneName) ? scan.ZoneId : scan.ZoneName;
+        if (onlineMapsAvailable)
+        {
+            SetStatus($"Wi-Fi matched {label}. Opening that map…");
+            RefreshUi();
+            _ = DownloadSelectionAsync(scan);
+            return true;
         }
-        finally { busy = false; RefreshUi(); }
+        if (!repository.TryGetCachedPackage(scan.BuildingId, scan.ZoneId, out var package)) return false;
+        buildingId = scan.BuildingId;
+        zoneId = scan.ZoneId;
+        RememberSelection();
+        SetStatus($"Wi-Fi matched {label}. Opening the saved map…");
+        Complete(package, null, null);
+        return true;
     }
 
     async Task DownloadSelectionAsync(FirebaseScanChoice scan)

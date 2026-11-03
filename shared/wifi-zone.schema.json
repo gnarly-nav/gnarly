@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gnarly Wi-Fi zone label",
+  "description": "Access points the mapping phone was joined to while this zone was scanned. The navigator uses the BSSID to choose which world map to load. It does not place the user; ARKit relocalization does that after the map loads.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "zoneId", "accessPoints"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "zoneId": { "type": "string", "minLength": 1 },
+    "accessPoints": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["bssid"],
+        "properties": {
+          "bssid": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{2}(:[0-9a-f]{2}){5}$",
+            "description": "Associated access point, lowercase colon-separated MAC."
+          },
+          "ssid": { "type": "string", "minLength": 1, "maxLength": 32 }
+        }
+      }
+    }
+  }
+}

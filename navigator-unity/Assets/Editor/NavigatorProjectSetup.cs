@@ -46,6 +46,7 @@ public static class NavigatorProjectSetup
     {
         PlayerSettings.SetApplicationIdentifier(NamedBuildTarget.iOS, BundleId);
         PlayerSettings.iOS.cameraUsageDescription = "The camera is used to locate you in the building and show directions.";
+        PlayerSettings.iOS.locationUsageDescription = "Gnarly uses your location to read the building Wi-Fi network and open the right floor. The camera still finds your exact position.";
         PlayerSettings.iOS.targetOSVersionString = "16.0";
         PlayerSettings.iOS.targetDevice = iOSTargetDevice.iPhoneOnly;
         PlayerSettings.iOS.sdkVersion = iOSSdkVersion.DeviceSDK;

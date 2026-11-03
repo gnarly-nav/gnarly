@@ -151,6 +151,53 @@ test('publish validates the package and only then moves activeVersion', async ()
   }
 });
 
+test('wifi-zone.json labels the zone returned by the scan library', async () => {
+  const { server, metadata, objects } = world();
+  const base = await listen(server);
+  const wifi = readFileSync(resolve(examples, 'wifi-zone.example.json'));
+  try {
+    await metadata.createBuilding({
+      id: 'hall', name: 'Hall', status: 'draft', activeVersion: null, ownerUid: 'owner', acl: {}, visibility: 'authenticated',
+    });
+    const started = await call(base, 'POST', '/v1/buildings/hall/publishes', {
+      zones: [zoneManifest({ 'wifi-zone.json': wifi.length })],
+    }, 'owner');
+    assert.equal(started.status, 200);
+    const session = await started.json() as Session;
+    putSession(objects, session, { 'wifi-zone.json': wifi });
+    const committed = await call(base, 'POST', `/v1/buildings/hall/publishes/${session.publishId}/commit`, {}, 'owner');
+    assert.equal(committed.status, 200);
+    const zone = metadata.zones.get(`hall/${session.versionId}`)?.find(item => item.id === 'zone-a');
+    assert.deepEqual(zone?.accessPoints, [{ bssid: 'aa:bb:cc:dd:ee:ff', ssid: 'Building' }]);
+
+    const listed = await call(base, 'GET', '/v1/buildings', undefined, 'visitor');
+    const library = await listed.json() as { buildings: { zones: { id: string; accessPoints: { bssid: string }[] }[] }[] };
+    assert.deepEqual(library.buildings[0].zones.find(item => item.id === 'zone-a')?.accessPoints, [
+      { bssid: 'aa:bb:cc:dd:ee:ff', ssid: 'Building' },
+    ]);
+    const pack = await call(base, 'GET', '/v1/buildings/hall/package?zoneId=zone-a', undefined, 'visitor');
+    const body = await pack.json() as { zones: { files: { name: string }[] }[] };
+    assert.equal(body.zones[0].files.some(file => file.name === 'wifi-zone.json'), true);
+
+    const badWifi = Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      zoneId: 'zone-a',
+      accessPoints: [{ bssid: 'not-a-mac' }],
+    }));
+    const rejected = await call(base, 'POST', '/v1/buildings/hall/publishes', {
+      versionId: 'v-wifi',
+      zones: [zoneManifest({ 'wifi-zone.json': badWifi.length })],
+    }, 'owner');
+    const rejectedSession = await rejected.json() as Session;
+    putSession(objects, rejectedSession, { 'wifi-zone.json': badWifi });
+    const failed = await call(base, 'POST', `/v1/buildings/hall/publishes/${rejectedSession.publishId}/commit`, {}, 'owner');
+    assert.equal(failed.status, 400);
+    assert.equal(metadata.buildings.get('hall')?.activeVersion, session.versionId);
+  } finally {
+    server.close();
+  }
+});
+
 test('a publish that loses the pointer race does not overwrite the newer map', async () => {
   const { server, metadata, objects } = world();
   const base = await listen(server);
@@ -242,13 +289,14 @@ test('rate limits publish, list, and download separately for user, building, and
 type Session = { publishId: string; versionId: string; uploads: { name: string; zoneId: string; path: string; url: string; headers: { 'Content-Type': string } }[] };
 
 function zoneManifest(overrides: Record<string, number> = {}) {
-  const files = [
+  const files: [string, number, string][] = [
     ['building.json', buildingJson.length, 'application/json'],
     ['scan.json', scanJson.length, 'application/json'],
     ['scan-features.json', scanFeatures.length, 'application/json'],
     ['structure.usdz', structure.length, 'model/vnd.usdz+zip'],
     ['worldmap.bin', worldMap.length, 'application/octet-stream'],
-  ] as const;
+  ];
+  if (overrides['wifi-zone.json']) files.push(['wifi-zone.json', overrides['wifi-zone.json'], 'application/json']);
   return {
     zoneId: 'zone-a',
     floorId: 'ground',

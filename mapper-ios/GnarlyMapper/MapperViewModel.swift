@@ -127,6 +127,7 @@ final class MapperViewModel: ObservableObject {
         lastInstruction = "none"
         lastCaptureFailure = nil
         colorRecorder.reset()
+        WifiZoneLog.shared.reset()
         coverageGeneration += 1
         coverage = .empty
         liveSurfaces = []
@@ -448,6 +449,7 @@ final class MapperViewModel: ObservableObject {
                 self.uploadLogger.error("Surface color bake produced no output from \(keyframes.count) keyframes.")
             }
             self.statusText = savingStatus
+            let wifi = await WifiZoneLog.shared.finishDocument(zoneId: packageZoneID)
             self.arSession.getCurrentWorldMap { [weak self] worldMap, error in
                 Task { @MainActor in
                     guard let self else { return }
@@ -467,7 +469,8 @@ final class MapperViewModel: ObservableObject {
                             stairs: draft.stairs.isEmpty ? nil : draft,
                             recoveredStairs: recoveredStairs,
                             recoveredFloors: recoveredFloors,
-                            surfaceColors: colors
+                            surfaceColors: colors,
+                            wifiZone: wifi
                         )
                         try StairCatalogStore.save(draft)
                         self.catalog = draft
@@ -487,7 +490,10 @@ final class MapperViewModel: ObservableObject {
                         }
                         self.previewSummary = colorStatus
                         self.phase = .preview
-                        self.statusText = "Package saved. \(colorStatus) \(stairStatus)"
+                        let wifiStatus = wifi == nil
+                            ? "No building Wi-Fi was recorded, so visitors choose this floor."
+                            : "Wi-Fi will open this zone for a visitor on the same access point."
+                        self.statusText = "Package saved. \(colorStatus) \(stairStatus) \(wifiStatus)"
                     } catch {
                         self.showError("Package export failed: \(error.localizedDescription)")
                     }
@@ -570,6 +576,10 @@ final class MapperViewModel: ObservableObject {
                 if FileManager.default.fileExists(atPath: colorsJSON.path), FileManager.default.fileExists(atPath: colorsAtlas.path) {
                     files.append(PackageUpload(name: SurfaceColorBakeResult.jsonFileName, zoneId: zoneID, contentType: "application/json", fileURL: colorsJSON))
                     files.append(PackageUpload(name: SurfaceColorBakeResult.atlasFileName, zoneId: zoneID, contentType: "image/jpeg", fileURL: colorsAtlas))
+                }
+                let wifiZone = packageURL.appendingPathComponent(WifiZoneDocument.fileName)
+                if FileManager.default.fileExists(atPath: wifiZone.path) {
+                    files.append(PackageUpload(name: WifiZoneDocument.fileName, zoneId: zoneID, contentType: "application/json", fileURL: wifiZone))
                 }
                 let connectionsURL = packageURL.appendingPathComponent("zone-connections.json")
                 if FileManager.default.fileExists(atPath: connectionsURL.path) {
@@ -688,6 +698,7 @@ final class MapperViewModel: ObservableObject {
         pathSamplingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             guard let self, self.isScanning else { return }
             self.sampleWalkedPathIfNeeded()
+            WifiZoneLog.shared.sampleSoon()
             if let frame = self.arSession.currentFrame {
                 self.colorRecorder.consider(frame)
                 self.colorFrameCount = self.colorRecorder.count

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "zoneId": "zone-a",
+  "accessPoints": [
+    { "bssid": "aa:bb:cc:dd:ee:ff", "ssid": "Building" }
+  ]
+}

@@ -13,7 +13,8 @@ enum POCPackageExporter {
         stairs: StairCatalog? = nil,
         recoveredStairs: [StairVolume] = [],
         recoveredFloors: [FloorSlab] = [],
-        surfaceColors: SurfaceColorBakeResult? = nil
+        surfaceColors: SurfaceColorBakeResult? = nil,
+        wifiZone: WifiZoneDocument? = nil
     ) throws -> URL {
         let documentsDirectory = try FileManager.default.url(
             for: .documentDirectory,
@@ -104,6 +105,10 @@ enum POCPackageExporter {
             try surfaceColors.atlas.write(to: packageURL.appendingPathComponent(SurfaceColorBakeResult.atlasFileName), options: .atomic)
             files.append(SurfaceColorBakeResult.jsonFileName)
             files.append(SurfaceColorBakeResult.atlasFileName)
+        }
+        if let wifiZone {
+            try encoder.encode(wifiZone).write(to: packageURL.appendingPathComponent(WifiZoneDocument.fileName), options: .atomic)
+            files.append(WifiZoneDocument.fileName)
         }
         if let stairs, !stairs.stairs.isEmpty {
             files.append("stairs.json")

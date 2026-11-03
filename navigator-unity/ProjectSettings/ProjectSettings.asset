@@ -521,7 +521,7 @@ PlayerSettings:
   logObjCUncaughtExceptions: 1
   enableCrashReportAPI: 0
   cameraUsageDescription: The camera is used to locate you in the building and show directions.
-  locationUsageDescription: 
+  locationUsageDescription: Gnarly uses your location to read the building Wi-Fi network and open the right floor. The camera still finds your exact position. 
   microphoneUsageDescription: 
   bluetoothUsageDescription: 
   macOSTargetOSVersion: 12.0

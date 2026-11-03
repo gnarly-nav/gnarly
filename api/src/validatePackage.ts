@@ -27,6 +27,7 @@ const validators: Record<string, ValidateFn> = {
   'zone-connections.json': ajv.compile(loadSchema('zone-connections.schema.json')),
   'building-layout.json': ajv.compile(loadSchema('building-layout.schema.json')),
   'surface-colors.json': ajv.compile(loadSchema('surface-colors.schema.json')),
+  'wifi-zone.json': ajv.compile(loadSchema('wifi-zone.schema.json')),
 };
 
 function schemaErrors(validate: ValidateFn): string {
@@ -72,10 +73,19 @@ export function validatePackageObject(name: string, bytes: Buffer, zoneId: strin
   if (!validate(value)) {
     throw new ApiError(400, 'invalid_package', `${name} does not match its schema: ${schemaErrors(validate)}`);
   }
-  if ((name === 'building.json' || name === 'scan-features.json' || name === 'surface-colors.json') && value.zoneId !== zoneId) {
+  if ((name === 'building.json' || name === 'scan-features.json' || name === 'surface-colors.json' || name === 'wifi-zone.json') && value.zoneId !== zoneId) {
     throw new ApiError(400, 'invalid_package', `${name} zoneId must be ${zoneId}.`);
   }
   if (name === 'surface-colors.json' && value.atlas !== 'surface-colors.jpg') {
     throw new ApiError(400, 'invalid_package', 'surface-colors.json atlas must be surface-colors.jpg.');
   }
+}
+
+/** Access points from a wifi-zone.json that has already passed schema validation. */
+export function readWifiAccessPoints(bytes: Buffer): { bssid: string; ssid?: string }[] {
+  const value = parseJson('wifi-zone.json', bytes) as { accessPoints?: { bssid?: string; ssid?: string }[] };
+  return (value.accessPoints ?? []).flatMap(point => {
+    if (!point || typeof point.bssid !== 'string') return [];
+    return point.ssid ? [{ bssid: point.bssid, ssid: point.ssid }] : [{ bssid: point.bssid }];
+  });
 }

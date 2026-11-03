@@ -34,7 +34,7 @@ import {
   type ZoneRecord,
 } from './model.ts';
 import { rateKey, rateWindow, type CounterStore, type MetadataStore, type ObjectStore } from './store.ts';
-import { validatePackageObject } from './validatePackage.ts';
+import { readWifiAccessPoints, validatePackageObject } from './validatePackage.ts';
 
 export type Deps = {
   now: () => Date;
@@ -103,6 +103,10 @@ export class PublishApi {
           id: zone.id,
           name: zone.name,
           floorId: zone.floorId,
+          accessPoints: (zone.accessPoints ?? []).map(point => ({
+            bssid: point.bssid,
+            ...(point.ssid ? { ssid: point.ssid } : {}),
+          })),
         }))
         : [];
       buildings.push({
@@ -232,6 +236,10 @@ export class PublishApi {
       }
       const bytes = await this.deps.objects.read(file.path, FILE_LIMITS[file.name] ?? file.size);
       validatePackageObject(file.name, bytes, file.zoneId);
+      if (file.name === 'wifi-zone.json') {
+        const zone = publish.zones.find(item => item.zoneId === file.zoneId);
+        if (zone) zone.accessPoints = readWifiAccessPoints(bytes);
+      }
     }
 
     const write = this.commitWrite(publish);
@@ -257,6 +265,8 @@ export class PublishApi {
         worldMapPath: uploaded.get(`${zone.zoneId}:worldmap.bin`),
         surfaceColorsPath: uploaded.get(`${zone.zoneId}:surface-colors.json`),
         surfaceColorAtlasPath: uploaded.get(`${zone.zoneId}:surface-colors.jpg`),
+        wifiZonePath: uploaded.get(`${zone.zoneId}:wifi-zone.json`),
+        ...(zone.accessPoints?.length ? { accessPoints: zone.accessPoints } : {}),
       });
     }
     const floors = new Map(publish.carry.floors.map(floor => [floor.id, floor]));
@@ -313,6 +323,7 @@ export class PublishApi {
       ['worldmap.bin', zone.worldMapPath, true],
       ['surface-colors.json', zone.surfaceColorsPath, false],
       ['surface-colors.jpg', zone.surfaceColorAtlasPath, false],
+      ['wifi-zone.json', zone.wifiZonePath, false],
     ] as const;
     const signed = [];
     for (const [name, stored, required] of files) {
