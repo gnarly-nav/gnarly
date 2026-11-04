@@ -36,7 +36,14 @@ function world(options: { quotas?: Quotas; adminUid?: string } = {}) {
     adminUid: options.adminUid ?? 'admin',
     verifyToken: async token => {
       if (!token.startsWith('user:')) throw new ApiError(401, 'unauthenticated', 'Sign in again.');
-      return { uid: token.slice('user:'.length) };
+      const uid = token.slice('user:'.length);
+      const editor = ['owner', 'editor', 'admin'].includes(uid);
+      return {
+        uid,
+        email: editor || uid === 'unverified' || uid === 'password' ? 'nj277@cornell.edu' : 'reader@example.com',
+        email_verified: uid !== 'unverified',
+        firebase: { sign_in_provider: uid === 'password' ? 'password' : 'google.com' },
+      };
     },
     objects,
     metadata,
@@ -59,6 +66,26 @@ test('health and auth', async () => {
     assert.equal(denied.status, 401);
     const origin = await fetch(base + '/v1/buildings', { headers: { origin: 'https://evil.example' } });
     assert.equal(origin.status, 403);
+  } finally {
+    server.close();
+  }
+});
+
+test('write routes require the verified editor Google login', async () => {
+  const { server, metadata } = world();
+  const base = await listen(server);
+  try {
+    await metadata.createBuilding({
+      id: 'hall', name: 'Hall', status: 'active', activeVersion: 'v1', ownerUid: 'reader',
+      acl: { password: 'editor', unverified: 'editor' }, visibility: 'authenticated',
+    });
+    for (const uid of ['reader', 'unverified', 'password']) {
+      assert.equal((await call(base, 'GET', '/v1/buildings', undefined, uid)).status, 200);
+      for (const path of ['/v1/buildings', '/v1/buildings/hall/publishes', '/v1/buildings/hall/publishes/existing/commit']) {
+        assert.equal((await call(base, 'POST', path, {}, uid)).status, 403);
+      }
+    }
+    assert.equal((await call(base, 'POST', '/v1/buildings', { id: 'new-hall', name: 'New Hall' }, 'editor')).status, 200);
   } finally {
     server.close();
   }

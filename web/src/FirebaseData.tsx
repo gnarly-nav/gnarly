@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Database, FileJson, RefreshCw, Save, ShieldCheck } from 'lucide-react';
-import { canEditFirebase, listDataRecords, loadStorageData, saveDataRecord, type DataRecord } from './firebase';
+import { listDataRecords, loadStorageData, saveDataRecord, type DataRecord } from './firebase';
 
-type Props = { connected: boolean; onClose: () => void; onConnect: () => void; onDirtyChange?: (dirty: boolean) => void };
+type Props = { connected: boolean; editor: boolean; onClose: () => void; onConnect: () => void; onDirtyChange?: (dirty: boolean) => void };
 const assetFields = ['buildingJsonPath', 'scanFeaturesPath', 'scanJsonPath'];
 
-export default function FirebaseData({ connected, onClose, onConnect, onDirtyChange }: Props) {
+export default function FirebaseData({ connected, editor, onClose, onConnect, onDirtyChange }: Props) {
   const requests=useRef(0),assetRequest=useRef(0);
   const [recordSearch,setRecordSearch]=useState('');
   const [records, setRecords] = useState<DataRecord[]>([]);
@@ -17,7 +17,6 @@ export default function FirebaseData({ connected, onClose, onConnect, onDirtyCha
   const [review, setReview] = useState(false);
   const [asset, setAsset] = useState<{ path: string; content: string } | null>(null);
   const selected = records.find(item => item.path === selectedPath);
-  const editor = connected && canEditFirebase();
   const parsed = useMemo(() => {
     try {
       const value = JSON.parse(draft);

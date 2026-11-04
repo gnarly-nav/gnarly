@@ -36,7 +36,7 @@ export function createFirebaseDeps(): Deps & { trustProxy?: boolean } {
     verifyToken: async token => {
       try {
         const decoded = await auth.verifyIdToken(token);
-        return { uid: decoded.uid };
+        return decoded;
       } catch {
         throw new ApiError(401, 'unauthenticated', 'Sign in again.');
       }

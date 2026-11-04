@@ -12,7 +12,7 @@ A failed upload or a failed check leaves the previous active map in place. Zones
 
 ## ACL
 
-- `ownerUid`, an `acl` entry of `owner` or `editor`, or `GNARLY_ADMIN_UID` can publish.
+- Building creation and publishing require a verified Google session for `nj277@cornell.edu`. For existing buildings, the account also needs to match `ownerUid`, have an `owner` or `editor` ACL entry, or match `GNARLY_ADMIN_UID`. Set that variable to the editor’s Firebase UID if the editor needs access across buildings. The iOS mapper currently signs in with email and password and will need Google sign-in to publish under this policy.
 - `visibility: "members"` limits download to owner, editor, viewer, and admin. Anything else allows any signed-in user to download a published map.
 - Client Firestore writes cannot change `activeVersion`. Storage rules do not grant client reads or package writes; signed URLs bypass those rules.
 

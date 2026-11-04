@@ -39,7 +39,7 @@ import { validatePackageObject } from './validatePackage.ts';
 export type Deps = {
   now: () => Date;
   adminUid: string;
-  verifyToken: (token: string) => Promise<{ uid: string }>;
+  verifyToken: (token: string) => Promise<{ uid: string; email?: string; email_verified?: boolean; firebase?: { sign_in_provider: string } }>;
   objects: ObjectStore;
   metadata: MetadataStore;
   counters: CounterStore;

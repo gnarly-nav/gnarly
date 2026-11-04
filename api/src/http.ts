@@ -33,9 +33,10 @@ export function createHandler(deps: Deps & { trustProxy?: boolean; corsOrigins?:
         send(res, 200, { ok: true });
         return;
       }
-      const caller = await authenticate(req, deps, trustProxy);
+      const { caller, canEdit } = await authenticate(req, deps, trustProxy);
       const building = /^\/v1\/buildings\/([^/]+)(?:\/(.*))?$/.exec(url.pathname);
       if (req.method === 'POST' && url.pathname === '/v1/buildings') {
+        requireEditor(canEdit);
         send(res, 200, await api.createBuilding(caller, await readJson(req)));
         return;
       }
@@ -56,10 +57,12 @@ export function createHandler(deps: Deps & { trustProxy?: boolean; corsOrigins?:
       }
       const publish = /^publishes\/([^/]+)\/commit$/.exec(rest);
       if (req.method === 'POST' && rest === 'publishes') {
+        requireEditor(canEdit);
         send(res, 200, await api.startPublish(caller, buildingId, await readJson(req)));
         return;
       }
       if (req.method === 'POST' && publish) {
+        requireEditor(canEdit);
         send(res, 200, await api.commitPublish(caller, buildingId, decodeURIComponent(publish[1])));
         return;
       }
@@ -78,13 +81,21 @@ export function createHandler(deps: Deps & { trustProxy?: boolean; corsOrigins?:
   };
 }
 
-async function authenticate(req: Request, deps: Deps, trustProxy: boolean): Promise<Caller> {
+async function authenticate(req: Request, deps: Deps, trustProxy: boolean) {
   const headerValue = header(req, 'authorization');
   const token = headerValue?.startsWith('Bearer ') ? headerValue.slice(7).trim() : '';
   if (!token) throw new ApiError(401, 'unauthenticated', 'Sign in before publishing or downloading.');
   const user = await deps.verifyToken(token);
   if (!user.uid) throw new ApiError(401, 'unauthenticated', 'Sign in before publishing or downloading.');
-  return { uid: user.uid, ip: clientIp(req, trustProxy) };
+  const caller: Caller = { uid: user.uid, ip: clientIp(req, trustProxy) };
+  const canEdit = user.email === 'nj277@cornell.edu'
+    && user.email_verified === true
+    && user.firebase?.sign_in_provider === 'google.com';
+  return { caller, canEdit };
+}
+
+function requireEditor(canEdit: boolean) {
+  if (!canEdit) throw new ApiError(403, 'forbidden', 'Map writes require the verified editor Google account.');
 }
 
 export function clientIp(req: IncomingMessage, trustProxy: boolean): string {

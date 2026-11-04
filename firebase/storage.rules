@@ -6,19 +6,21 @@ service firebase.storage {
       return request.auth != null;
     }
 
-    // Keep this UID in sync with firestore.rules.
-    function isAdmin() {
-      return signedIn() && request.auth.uid == "WwvbXcl5hpQgdl8KO79JwcThYJd2";
+    function isEditor() {
+      return signedIn()
+        && request.auth.token.email == "nj277@cornell.edu"
+        && request.auth.token.email_verified == true
+        && request.auth.token.firebase.sign_in_provider == "google.com";
     }
 
     // The connection test still uses the client SDK. Package bytes use signed URLs, which bypass these rules.
     match /buildings/firebase-test/{path=**} {
-      allow read, write: if isAdmin();
+      allow read, write: if isEditor();
     }
 
     match /buildings/{buildingId}/{versionId}/{assetPath=**} {
       allow read: if false;
-      allow write: if isAdmin() && (
+      allow write: if isEditor() && (
         assetPath.matches('zones/[^/]+/graph-edits/[^/]+\\.json') ||
         assetPath.matches('graph-edits/[^/]+\\.json') ||
         assetPath.matches('building-layout\\.json') ||

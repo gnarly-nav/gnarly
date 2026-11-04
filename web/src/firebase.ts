@@ -1,8 +1,10 @@
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
-  onAuthStateChanged,
+  GoogleAuthProvider,
+  onIdTokenChanged,
   signInWithEmailAndPassword,
+  signInWithPopup,
   signOut,
   type User,
 } from 'firebase/auth';
@@ -113,8 +115,28 @@ async function loadScan(path: string | undefined): Promise<{ scan?: ScanFeatures
   }
 }
 
-export function watchUser(callback: (user: User | null) => void) {
-  return auth ? onAuthStateChanged(auth, callback) : () => {};
+let editorUser: User | null = null;
+
+export function watchUser(callback: (user: User | null, editor: boolean) => void) {
+  if (!auth) return () => {};
+  let revision = 0;
+  const unsubscribe = onIdTokenChanged(auth, async user => {
+    const current = ++revision;
+    const token = await user?.getIdTokenResult().catch(() => null);
+    if (current !== revision || user !== auth.currentUser) return;
+    const editor = token?.claims.email === 'nj277@cornell.edu'
+      && token.claims.email_verified === true
+      && token.signInProvider === 'google.com';
+    editorUser = editor ? user : null;
+    callback(user, editor);
+  });
+  return () => { revision++; unsubscribe(); };
+}
+export async function loginWithGoogle() {
+  if (!auth) throw Error('Firebase is not configured');
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+  await signInWithPopup(auth, provider);
 }
 export async function login(email: string, password: string) {
   if (!auth) throw Error('Firebase is not configured');
@@ -261,7 +283,7 @@ export async function loadPreviousBuildingVersion(input: Building): Promise<Buil
 }
 
 export type DataRecord = { path: string; data: DocumentData };
-export const canEditFirebase = () => auth?.currentUser?.uid === 'WwvbXcl5hpQgdl8KO79JwcThYJd2';
+export const canEditFirebase = () => editorUser !== null && editorUser === auth?.currentUser;
 
 export async function saveZoneConnections(input: Building, document: ZoneConnections): Promise<ZoneConnections> {
   if (!db || !storage || !input.activeVersion || !canEditFirebase()) throw Error('The signed-in account cannot edit zone connections.');

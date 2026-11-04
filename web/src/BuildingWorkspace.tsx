@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Box, CloudUpload, Eye, Footprints, HardDrive, Keyboard, Link, Magnet, MapPinPlus, MousePointer2, Move3d, Pencil, PersonStanding, Redo2, Scan, Spline, Square, Undo2, X } from 'lucide-react';
 import Viewer, { type DropRequest, type FloorPick, type WalkLocation } from './Viewer';
 import type { Building, BuildingLayout, Graph, Node, ZoneConnection, ZoneConnections, ZoneView } from './data.ts';
-import { canEditFirebase } from './firebase.ts';
 import { pointOnFloor } from './geometry.ts';
 import { addWaypoint, autoConnect, connectWaypoints, deleteWaypoint, disconnectWaypoints, updateWaypoint, validateGraph } from './graphEdit.ts';
 import { copyGraph, createGraphStore, readLocalGraph, type GraphSnapshot } from './graphStore.ts';
@@ -17,7 +16,7 @@ import { WaypointInspector, ZoneInspector } from './Inspector';
 import { Kbd, ToolButton } from './ui.tsx';
 import type { ElevatorSuggestion, JoinOption, LinkKind, PendingLink, Tool } from './workspaceShared.tsx';
 
-type Props = { building: Building; onBack: () => void; onUpdate: (building: Building) => void; onDirtyChange?: (dirty:boolean)=>void };
+type Props = { building: Building; canEdit: boolean; onBack: () => void; onUpdate: (building: Building) => void; onDirtyChange?: (dirty:boolean)=>void };
 type Tab = 'view' | 'edit';
 type Status = 'loading' | 'saved' | 'unsynced' | 'saving' | 'failed' | 'conflict';
 type HistoryEntry = { zoneId: string; graph: Graph | null; layout: BuildingLayout | undefined; layoutDirty: boolean; label: string };
@@ -37,85 +36,7 @@ const typingIn = (target: EventTarget | null) => target instanceof HTMLElement &
 const TOOL_HINTS: Record<Tool, [string, string][]> = {
   select: [['Click', 'select'], ['Arrows', 'move on X / Z'], ['Green arrow', 'zone to another floor'], ['Ring', 'rotate'], ['Double-click', 'rename'], ['Del', 'delete']],
   add: [['Click floor', 'add waypoint'], ['Click waypoint', 'continue from it'], ['Esc', 'end chain']],
-  connect: [['Click', 'waypoint to start'], ['Click again', 'connect'], ['Esc', 'stop']],
-  arrange: [['Drag floor', 'move zone'], ['Arrows / ring', 'move / rotate'], ['G / R', 'keyboard move / rotate'], ['Ctrl', 'flip snapping']],
-};
-
-export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChange}:Props) {
-  const zones=useMemo(()=>zonesOf(building),[building]);
-  const [mode,setMode]=useState<DataMode>(building.demo||!canEditFirebase()?'local':'firebase');
-  const [tab,setTab]=useState<Tab>('view');
-  const [editZoneId,setEditZoneId]=useState(()=>zones.some(zone=>zone.id===building.zoneId)?building.zoneId!:zones[0].id);
-  const editZone=zones.find(zone=>zone.id===editZoneId)||zones[0];
-  const [sessionGraphs,setSessionGraphs]=useState<Record<string,Graph>>({});
-  const savedZones=useMemo(()=>zones.map(zone=>({...zone,graph:sessionGraphs[zone.id]||(mode==='local'&&readLocalGraph(zoneBuilding(building,zone)))||zone.graph})),[zones,sessionGraphs,mode,building]);
-  const store=useMemo(()=>createGraphStore(zoneBuilding(building,editZone),mode),[building.id,building.activeVersion,editZone.id,mode]);
-  const key=draftKey(building,mode,editZoneId);
-
-  const [base,setBase]=useState<GraphSnapshot|null>(null),[draft,setDraft]=useState<Graph|null>(null),[draftOwner,setDraftOwner]=useState(''),[remote,setRemote]=useState<GraphSnapshot|null>(null);
-  const baseRef=useRef<GraphSnapshot|null>(null),savingRef=useRef(false),loadedKey=useRef<string|null>(null);
-  const [status,setStatus]=useState<Status>('loading'),[error,setError]=useState(''),[notice,setNotice]=useState('');
-  const [tool,setTool]=useState<Tool>('select'),[selectedKey,setSelectedKey]=useState(''),[place,setPlace]=useState(''),[renaming,setRenaming]=useState<{key:string;in:'tree'|'scene'}|null>(null);
-  const [boundaryPlacement,setBoundaryPlacement]=useState<'start'|'end'|null>(null),[pendingLink,setPendingLink]=useState<PendingLink|null>(null);
-  const [meta]=useState(()=>loadBuildingMeta(building,mode));
-  const [connections,setConnections]=useState<ZoneConnections>(meta.connections),[layout,setLayout]=useState<BuildingLayout|undefined>(meta.layout);
-  const [layoutDirty,setLayoutDirty]=useState(false),[layoutSaving,setLayoutSaving]=useState(false),[linkSaving,setLinkSaving]=useState(false);
-  const [snapping,setSnapping]=useState(true),[autoLink,setAutoLink]=useState(true),[joining,setJoining]=useState(''),[cameraView,setCameraView]=useState<'iso'|'top'>('iso'),[shortcuts,setShortcuts]=useState(false);
-  const [level,setLevel]=useState<number|'all'>('all'),[start,setStart]=useState(''),[destination,setDestination]=useState(''),[showRoute,setShowRoute]=useState(false),[step,setStep]=useState(0),[playing,setPlaying]=useState(false),[reset,setReset]=useState(0);
-  const [walker,setWalker]=useState<WalkLocation|null>(()=>readWalker(building)?.location||null),[walking,setWalking]=useState(()=>Boolean(readWalker(building)?.walking)),[placingWalker,setPlacingWalker]=useState(false),[walkDrop,setWalkDrop]=useState<DropRequest|null>(null),[draggingWalker,setDraggingWalker]=useState(false),[elevatorStop,setElevatorStop]=useState<ElevatorStop|null>(null);
-  const history=useRef<{past:HistoryEntry[];future:HistoryEntry[];lastKey?:string;lastAt:number}>({past:[],future:[],lastAt:0});
-  const [,setHistoryTick]=useState(0);
-
-  const editing=tab==='edit';
-  const activeDraft=draftOwner===editZoneId?draft:null;
-  const graph=activeDraft||savedZones.find(zone=>zone.id===editZoneId)!.graph;
-  const scan=editZone.scan;
-  const modelZones=useMemo(()=>savedZones.map(zone=>zone.id===editZoneId&&activeDraft?{...zone,graph:activeDraft}:zone),[savedZones,editZoneId,activeDraft]);
-  const model=useMemo(()=>combineBuilding(modelZones,connections,layout),[modelZones,connections,layout]);
-  const dirty=Boolean(base&&activeDraft&&JSON.stringify(base.graph)!==JSON.stringify(activeDraft));
-  const selectedRef=selectedKey?splitKey(selectedKey):null;
-  const selected=selectedRef?.zoneId===editZoneId?graph.nodes.find(node=>node.id===selectedRef.nodeId):undefined;
-  const pending=dirty;
-  const zoneLayout=model.layout.find(item=>item.zoneId===editZoneId)!;
-  const current=useRef({pending});current.current={pending};
-  const route=useMemo(()=>showRoute?findBuildingRoute(model,start,destination):null,[model,start,destination,showRoute]);
-  const checks=useMemo(()=>zoneEdgeChecks(graph,scan),[graph,scan]);
-  const blocked=graph.edges.filter((_,index)=>checks[index].status==='blocked');
-  const newBlocked=useMemo(()=>{if(!base)return blocked;const baseChecks=zoneEdgeChecks(base.graph,scan);const previous=new Set(base.graph.edges.filter((edge,index)=>baseChecks[index].status==='blocked').map(edge=>JSON.stringify(edge)));return blocked.filter(edge=>!previous.has(JSON.stringify(edge)))},[base,blocked,scan]);
-  const issues=useMemo(()=>validateGraph(graph),[graph]);
-  const awaitingLinkHere=Boolean(pendingLink&&pendingLink.targetZoneId===editZoneId&&!pendingLink.toNodeId);
-
-  useEffect(()=>onDirtyChange?.(pending||layoutDirty),[pending,layoutDirty,onDirtyChange]);
-  useEffect(()=>{history.current={past:[],future:[],lastAt:0};setHistoryTick(t=>t+1)},[editZoneId,mode]);
-  useEffect(()=>{
-    let live=true,receivedSubscription=false;baseRef.current=null;loadedKey.current=null;
-    setStatus('loading');setBase(null);setDraft(null);setDraftOwner('');setRemote(null);setError('');
-    const zoneId=editZoneId;
-    function received(snapshot:GraphSnapshot){
-      if(!live||savingRef.current||baseRef.current?.revision===snapshot.revision)return;loadedKey.current=key;
-      if(baseRef.current && current.current.pending){setRemote(snapshot);setStatus('conflict');return;}
-      if(!baseRef.current){
-        try{
-          const saved=sessionStorage.getItem(key)||localStorage.getItem(key);
-          if(saved){
-            const local=JSON.parse(saved) as {base:GraphSnapshot;graph:Graph};
-            if(!local.base?.graph || !local.graph?.nodes || !local.graph?.edges)throw Error('Invalid draft');
-            baseRef.current=local.base;setBase(local.base);setDraft(local.graph);setDraftOwner(zoneId);
-            setRemote(local.base.revision===snapshot.revision?null:snapshot);setStatus(local.base.revision===snapshot.revision?'unsynced':'conflict');
-            setNotice('Recovered your unsaved draft in this tab.');
-            localStorage.removeItem(key);return;
-          }
-        }catch{setError('The stored draft could not be restored. The saved graph has been loaded.');sessionStorage.removeItem(key)}
-      }
-      baseRef.current=snapshot;setBase(snapshot);setDraft(copyGraph(snapshot.graph));setDraftOwner(zoneId);setRemote(null);setStatus('saved');
-    }
-    store.load().then(snapshot=>{if(!receivedSubscription)received(snapshot)}).catch(e=>{if(live){setError(errorText(e));setStatus('failed')}});
-    const unsubscribe=store.subscribe(snapshot=>{receivedSubscription=true;received(snapshot)},e=>{if(live)setError(e.message)});
-    return()=>{live=false;unsubscribe()};
-  },[store,key]);
-  useEffect(()=>{if(!base||!activeDraft||loadedKey.current!==key)return;try{if(pending)sessionStorage.setItem(key,JSON.stringify({base,graph:activeDraft}));else sessionStorage.removeItem(key)}catch{setError('Browser draft backup is unavailable. Keep this tab open until you save.')}},[base,activeDraft,pending,key]);
-  useEffect(()=>{if(!pending&&!layoutDirty)return;const guard=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue=''};window.addEventListener('beforeunload',guard);return()=>window.removeEventListener('beforeunload',guard)},[pending,layoutDirty]);
-  useEffect(()=>{if(walker)sessionStorage.setItem(walkerKey(building),JSON.stringify({location:walker,walking} satisfies SavedWalker))},[walker,walking,building.id,building.activeVersion]);
+  con…1959 tokens truncated…,JSON.stringify({location:walker,walking} satisfies SavedWalker))},[walker,walking,building.id,building.activeVersion]);
   useEffect(()=>{
     if(!model.byKey.has(start))setStart(model.nodes.find(node=>node.type==='entrance')?.key||model.nodes[0]?.key||'');
     if(!model.byKey.has(destination))setDestination(model.nodes.filter(node=>node.type==='destination').at(-1)?.key||model.nodes.at(-1)?.key||'');
@@ -149,7 +70,7 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
   }
   function leave(){if((pending||layoutDirty)&&!window.confirm('Leave with unsaved edits? Applied graph edits will remain in this tab.'))return;onBack()}
   function modeChange(next:DataMode){
-    if(next===mode)return;if((pending||layoutDirty)&&!window.confirm('Switch data modes? Your unsaved draft will remain in this tab.'))return;
+    if(!canEdit||next===mode)return;if((pending||layoutDirty)&&!window.confirm('Switch data modes? Your unsaved draft will remain in this tab.'))return;
     const nextMeta=loadBuildingMeta(building,next);setConnections(nextMeta.connections);setLayout(nextMeta.layout);setLayoutDirty(false);setSessionGraphs({});setPendingLink(null);setMode(next);
   }
   function connectPair(fromId:string,toId:string){try{change(connectWaypoints(graph,fromId,toId,scan),scan?.floors?.length?'Connected.':'Connected. No scan here, so it is marked unverified.','connect')}catch(e){setError(errorText(e))}}
@@ -220,7 +141,7 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
   function remove(){if(!selected)return;const external=zoneLinks.filter(item=>(item.from.zoneId===editZoneId&&item.from.nodeId===selected.id)||(item.to.zoneId===editZoneId&&item.to.nodeId===selected.id));if(external.length){setError('Remove this waypoint’s '+external.length+' zone link(s) before deleting it.');return}change(deleteWaypoint(graph,selected.id).graph,'Deleted '+(selected.label||selected.id)+'. Ctrl+Z to undo.','delete waypoint');setSelectedKey('')}
   function runAutoConnect(){if(!scan?.floors?.length){setError('Auto-connect needs this zone’s scan to check walls. Connect waypoints with the Connect tool instead.');return}const result=autoConnect(graph,scan);change(result.graph,result.added.length?result.added.length+' wall-checked connection(s) added.':'No new connections: every visible pair is already connected or blocked by walls.','auto-connect')}
   async function save():Promise<GraphSnapshot|null>{
-    if(!base||!activeDraft||savingRef.current)return null;
+    if(!canEdit||!base||!activeDraft||savingRef.current)return null;
     if(issues.length||newBlocked.length){setError('Resolve '+issues.length+' graph error(s) and '+newBlocked.length+' newly blocked connection(s) before saving.');return null}
     if(remote){setStatus('conflict');return null}
     savingRef.current=true;setStatus('saving');setError('');
@@ -270,11 +191,13 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
   }
   function autoAlign(){const next=alignedLayout(editZoneId,connections,modelZones,layout);if(!next){setError('Join this zone to a neighbor first.');return}remember('re-fit zone');setLayout(next);setLayoutDirty(true);setNotice('Re-fitted to the joined zone(s).')}
   async function persistLayout(next=layout){
+    if(!canEdit)return false;
     setLayoutSaving(true);setError('');
     try{const saved=await saveLayout(building,mode,next||{schemaVersion:1,zones:[]});setLayout(saved);setLayoutDirty(false);if(mode==='firebase')onUpdate({...building,layout:saved});setNotice('Zone placement saved'+(mode==='firebase'?' to Firebase.':' in this browser.'));return true}
     catch(e){setError(errorText(e));return false}finally{setLayoutSaving(false)}
   }
   async function persistConnections(next:ZoneConnections,message:string){
+    if(!canEdit)return false;
     setLinkSaving(true);setError('');
     try{const saved=await saveConnections(building,mode,next);setConnections(saved);if(mode==='firebase')onUpdate({...building,zoneConnections:saved});setNotice(message);return true}
     catch(e){setError(errorText(e));return false}finally{setLinkSaving(false)}
@@ -400,7 +323,7 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
     finally{savingRef.current=false;setJoining('')}
   }
   function changeTab(next:Tab){
-    if(next===tab)return;
+    if(next===tab||(next==='edit'&&!canEdit))return;
     setTab(next);setTool('select');setBoundaryPlacement(null);setWalking(false);setPlacingWalker(false);setPlaying(false);
     if(next==='edit'&&place&&splitKey(place).zoneId!==editZoneId)switchZone(splitKey(place).zoneId);
     if(next==='edit'&&place)setSelectedKey(place);
@@ -467,7 +390,7 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
       <div className="ws-title"><small><span className={'live-dot'+(building.demo?' demo':'')}/>{building.demo?'Sample building':'Live building'}</small><strong>{building.name}</strong></div>
       <div className="segmented" role="tablist">
         <button role="tab" aria-selected={!editing} className={!editing?'on':''} onClick={()=>changeTab('view')}><Eye size={13}/> Explore</button>
-        <button role="tab" aria-selected={editing} className={editing?'on':''} disabled={!base||status==='saving'} onClick={()=>changeTab('edit')} data-tip="Edit map  E"><Pencil size={13}/> Edit</button>
+        {canEdit&&<button role="tab" aria-selected={editing} className={editing?'on':''} disabled={!base||status==='saving'} onClick={()=>changeTab('edit')} data-tip="Edit map  E"><Pencil size={13}/> Edit</button>}
       </div>
     </header>
 
@@ -540,7 +463,7 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
         {blocked.length>0&&<span className="pill blocked">{blocked.length} blocked</span>}
         {unverified>0&&<span className="pill unverified">{unverified} unverified</span>}
         <span className={'sync '+statusTone}><i/>{statusText}</span>
-        <select aria-label="Data mode" className="mode-select" disabled={status==='saving'} value={mode} onChange={e=>modeChange(e.target.value as DataMode)}><option value="local">Local test</option>{!building.demo&&canEditFirebase()&&<option value="firebase">Firebase</option>}</select>
+        <select aria-label="Data mode" className="mode-select" disabled={status==='saving'} value={mode} onChange={e=>modeChange(e.target.value as DataMode)}><option value="local">Local test</option>{!building.demo&&<option value="firebase">Firebase</option>}</select>
         {pending&&<button className="btn ghost small" onClick={cancel}>Discard</button>}
       </div>
     </footer>}
@@ -548,7 +471,7 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
     <div className="toasts" aria-live="polite">
       {error&&<div role="alert" className="toast bad"><span>{error}</span><button className="icon-btn" aria-label="Dismiss" onClick={()=>setError('')}><X size={13}/></button></div>}
       {notice&&!error&&<div className="toast"><span>{notice}</span>{/Ctrl\+Z/.test(notice)&&<button className="btn small" onClick={undo}>Undo</button>}</div>}
-      {!base&&status==='failed'&&mode!=='local'&&<div className="toast"><span>Couldn't load the shared graph.</span><button className="btn small" onClick={()=>modeChange('local')}>Open local test mode</button></div>}
+      {!base&&status==='failed'&&mode!=='local'&&<div className="toast"><span>Couldn't load the shared graph.</span>{canEdit&&<button className="btn small" onClick={()=>modeChange('local')}>Open local test mode</button>}</div>}
     </div>
 
     {shortcuts&&<div className="sheet-backdrop" onClick={()=>setShortcuts(false)}><div className="shortcut-sheet glass" role="dialog" aria-label="Keyboard shortcuts" onClick={e=>e.stopPropagation()}>

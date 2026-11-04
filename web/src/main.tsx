@@ -23,7 +23,8 @@ function App() {
   const [dataDirty, setDataDirty] = useState(false);
   const [dataOpen, setDataOpen] = useState(false);
   const [live, setLive] = useState<Building[]>([]);
-  const [user, setUser] = useState(false);
+  const [account, setAccount] = useState({ uid: null as string | null, editor: false });
+  const user = Boolean(account.uid);
   const [authOpen, setAuthOpen] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [loadingList, setLoadingList] = useState(false);
@@ -33,7 +34,22 @@ function App() {
   const [search, setSearch] = useState('');
   const [refresh, setRefresh] = useState(0);
   const selectionRequest = useRef(0);
-  useEffect(() => watchUser(u => setUser(Boolean(u))), []);
+  useEffect(() => {
+    let previousUid: string | null = null;
+    return watchUser((u, editor) => {
+      const uid = u?.uid ?? null;
+      if (uid !== previousUid) {
+        previousUid = uid;
+        selectionRequest.current++;
+        setSelected(building => building?.demo ? building : null);
+        setLive([]);
+        setLoadingMap(false);
+        setWorkspaceDirty(false);
+        setDataDirty(false);
+      }
+      setAccount({ uid, editor });
+    });
+  }, []);
   useEffect(() => {
     let active = true;
     setLoadError('');
@@ -43,7 +59,7 @@ function App() {
       .catch(e => { if (active) setLoadError(failureMessage(e)); })
       .finally(() => { if (active) setLoadingList(false); });
     return () => { active = false; };
-  }, [user, refresh]);
+  }, [account.uid, refresh]);
   const buildings = [demoBuilding, ...live];
   const query = search.trim().toLowerCase();
   const filtered = buildings.filter(b => b.name.toLowerCase().includes(query) || b.graph?.nodes.some(n => n.label?.toLowerCase().includes(query)));
@@ -60,7 +76,7 @@ function App() {
       if (selectionRequest.current === request) setSelected({ ...building, notice: failureMessage(e) });
     } finally { if (selectionRequest.current === request) setLoadingMap(false); }
   }
-  function closeDetails() { selectionRequest.current++; setSelected(null); setLoadingMap(false); }
+  function closeDetails() { selectionRequest.current++; setInside(false); setSelected(null); setLoadingMap(false); }
   function back() { setInside(false); setWorkspaceDirty(false); }
   function canLeave() {
     if (dataOpen && dataDirty) return window.confirm('Discard the unsaved JSON changes?');
@@ -82,8 +98,8 @@ function App() {
       </div>
     </header>
     <Suspense fallback={<div className="page-loading" role="status"><span className="loading-ring"/>Opening explorer…</div>}>
-      {dataOpen ? <FirebaseData connected={user} onDirtyChange={setDataDirty} onClose={() => {setDataOpen(false);setDataDirty(false)}} onConnect={() => setAuthOpen(true)}/>
-        : inside && selected?.graph ? <BuildingWorkspace key={selected.id+':'+selected.activeVersion} building={selected} onBack={back} onUpdate={setSelected} onDirtyChange={setWorkspaceDirty}/>
+      {dataOpen ? <FirebaseData key={account.uid} connected={user} editor={account.editor} onDirtyChange={setDataDirty} onClose={() => {setDataOpen(false);setDataDirty(false)}} onConnect={() => setAuthOpen(true)}/>
+        : inside && selected?.graph && (selected.demo || user) ? <BuildingWorkspace key={selected.id+':'+selected.activeVersion+':'+account.uid+':'+account.editor} building={selected} canEdit={account.editor} onBack={back} onUpdate={setSelected} onDirtyChange={setWorkspaceDirty}/>
         : <main className={'map-area '+(selected?'has-selection':'')}>
           <ExteriorMap buildings={buildings} selected={selected} onSelect={select}/><div className="map-tint"/>
           <aside className="map-panel glass">
