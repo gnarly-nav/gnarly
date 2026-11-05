@@ -13,8 +13,13 @@
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1162.0",
+    "@aws-sdk/client-s3": "^3.1162.0",
+    "@aws-sdk/lib-dynamodb": "^3.1162.0",
+    "@aws-sdk/s3-request-presigner": "^3.1162.0",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
+    "aws-jwt-verify": "^5.2.1",
     "firebase-admin": "^13.5.0",
     "firebase-functions": "^6.4.0"
   },

@@ -474,11 +474,8 @@ final class MapperViewModel: ObservableObject {
                             recoveredStairs: recoveredStairs,
                             recoveredFloors: recoveredFloors,
                             surfaceColors: colors,
-<<<<<<< HEAD
-                            colorRecorder: self.colorRecorder
-=======
+                            colorRecorder: self.colorRecorder,
                             meshBundle: meshBundle
->>>>>>> origin/main
                         )
                         try StairCatalogStore.save(draft)
                         self.catalog = draft

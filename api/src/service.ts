@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { assertAdmin } from './authz.ts';
 import {
   ApiError,
   BUILDING_FILES,
@@ -10,17 +11,12 @@ import {
   UPLOAD_TTL_MS,
   ZONE_OPTIONAL,
   ZONE_REQUIRED,
-  assertDownload,
   assertId,
-  assertPublish,
   assertSize,
-  canDownload,
-  canPublish,
   contentTypeFor,
   defaultQuotas,
   objectPath,
   parseObjectPath,
-  roleFor,
   type Action,
   type BuildingRecord,
   type Caller,
@@ -33,14 +29,14 @@ import {
   type Quotas,
   type ZoneRecord,
 } from './model.ts';
-import { rateKey, rateWindow, type CounterStore, type MetadataStore, type ObjectStore } from './store.ts';
+import { buildingData, parseRecordPath, rateKey, rateWindow, type CounterStore, type MetadataStore, type ObjectStore } from './store.ts';
 import { validatePackageObject } from './validatePackage.ts';
 import { type TexturingQueue } from './texturingQueue.ts';
 
 export type Deps = {
   now: () => Date;
   adminUid: string;
-  verifyToken: (token: string) => Promise<{ uid: string }>;
+  verifyToken: (token: string) => Promise<{ uid: string; email?: string; emailVerified?: boolean }>;
   objects: ObjectStore;
   metadata: MetadataStore;
   counters: CounterStore;
@@ -69,15 +65,13 @@ export class PublishApi {
   }
 
   async createBuilding(caller: Caller, body: unknown) {
+    assertAdmin(caller);
     const input = objectBody(body);
     const id = assertId(stringField(input, 'id', 'buildingId'), 'buildingId');
     await this.limit('publish', caller, id);
     const name = bounded(stringField(input, 'name', 'name'), 'name', 120);
     const existing = await this.deps.metadata.getBuilding(id);
-    if (existing) {
-      assertPublish(caller.uid, existing, this.deps.adminUid);
-      return { id, name: existing.name, created: false };
-    }
+    if (existing) return { id, name: existing.name, created: false };
     const record: BuildingRecord = {
       id,
       name,
@@ -93,33 +87,25 @@ export class PublishApi {
   }
 
   async trainSplat(caller: Caller, buildingId: string, body: unknown) {
+    assertAdmin(caller);
     const input = objectBody(body);
+    const id = assertId(buildingId, 'buildingId');
     const zoneId = assertId(stringField(input, 'zoneId', 'zoneId'), 'zoneId');
-    const method = stringField(input, 'method', 'method', 'splatfacto');
-    const building = await this.getBuildingOrThrow(buildingId);
-    assertPublish(caller.uid, building, this.deps.adminUid);
-    
+    const method = input.method == null || input.method === '' ? 'splatfacto' : stringField(input, 'method', 'method');
+    const building = await this.requireBuilding(id);
     if (!['splatfacto', 'dn-splatter', '2dgs'].includes(method)) {
       throw new ApiError(400, 'invalid_method', 'Method must be splatfacto, dn-splatter, or 2dgs.');
     }
-    
-    // Verify zone exists and has transforms.json
     const versionId = building.activeVersion;
     if (!versionId) throw new ApiError(404, 'not_found', 'Building has no active version.');
-    
-    const transformsPath = objectPath(buildingId, versionId, 'transforms.json', zoneId);
-    const exists = await this.deps.objects.exists(transformsPath);
-    if (!exists) {
+    const transformsPath = objectPath(id, versionId, 'transforms.json', zoneId);
+    if (!await this.deps.objects.stat(transformsPath)) {
       throw new ApiError(404, 'not_found', 'Zone has no transforms.json. Export keyframes from the mapper first.');
     }
-    
-    // In production, this would trigger the training worker (Cloud Run Job, Vertex AI, etc.)
-    // For now, return a job ID and status
-    const jobId = `splat-${buildingId}-${zoneId}-${Date.now()}`;
-    
+    const jobId = `splat-${id}-${zoneId}-${this.deps.now().getTime()}`;
     return {
       jobId,
-      buildingId,
+      buildingId: id,
       zoneId,
       method,
       status: 'queued',
@@ -132,9 +118,6 @@ export class PublishApi {
     const buildings = [];
     for (const building of await this.deps.metadata.listBuildings()) {
       if (building.id === 'firebase-test') continue;
-      const role = roleFor(caller.uid, building, this.deps.adminUid);
-      const visible = (canDownload(role, building) && building.activeVersion) || canPublish(role);
-      if (!visible) continue;
       const zones = building.activeVersion
         ? (await this.deps.metadata.listZones(building.id, building.activeVersion)).map(zone => ({
           id: zone.id,
@@ -150,6 +133,7 @@ export class PublishApi {
         latitude: building.latitude ?? null,
         longitude: building.longitude ?? null,
         mapHeadingDegrees: building.mapHeadingDegrees ?? null,
+        metadataOnly: building.metadataOnly === true,
         zones,
       });
     }
@@ -160,7 +144,6 @@ export class PublishApi {
     const id = assertId(buildingId, 'buildingId');
     await this.limit('download', caller, id);
     const building = await this.requireBuilding(id);
-    assertDownload(caller.uid, building, this.deps.adminUid);
     const requestedVersion = query.get('version');
     const versionId = requestedVersion ? assertId(requestedVersion, 'versionId') : building.activeVersion;
     if (!versionId) throw new ApiError(404, 'not_published', 'This building has no active map version.');
@@ -171,13 +154,18 @@ export class PublishApi {
     const zones = (await this.deps.metadata.listZones(id, versionId)).filter(zone => !zoneFilter || zone.id === zoneFilter);
     if (zoneFilter && !zones.length) throw new ApiError(404, 'not_found', `Zone ${zoneFilter} is not in this map version.`);
     const expiresAt = new Date(this.deps.now().getTime() + this.downloadTtlMs);
+    const lenient = building.metadataOnly === true;
     return {
       buildingId: id,
       versionId,
       name: building.name,
+      metadataOnly: lenient,
       expiresAt: expiresAt.toISOString(),
-      files: await this.signVersionFiles(id, versionId, version, expiresAt),
-      zones: await Promise.all(zones.map(zone => this.signZone(id, versionId, zone, expiresAt))),
+      layoutRevision: version.webBuildingLayoutRevision ?? '',
+      connectionsRevision: version.webZoneConnectionsRevision ?? '',
+      graphRevision: version.webGraphRevision ?? '',
+      files: await this.signVersionFiles(id, versionId, version, expiresAt, zones.length === 0),
+      zones: await Promise.all(zones.map(zone => this.signZone(id, versionId, zone, expiresAt, lenient))),
     };
   }
 
@@ -186,8 +174,7 @@ export class PublishApi {
     const parsed = parseObjectPath(path);
     if (!parsed) throw new ApiError(400, 'invalid_path', 'That storage path is not a package file.');
     await this.limit('download', caller, parsed.buildingId);
-    const building = await this.requireBuilding(parsed.buildingId);
-    assertDownload(caller.uid, building, this.deps.adminUid);
+    await this.requireBuilding(parsed.buildingId);
     const version = await this.deps.metadata.getVersion(parsed.buildingId, parsed.versionId);
     if (!version) throw new ApiError(404, 'not_found', 'That map version is not published.');
     const stat = await this.deps.objects.stat(path);
@@ -201,10 +188,10 @@ export class PublishApi {
   }
 
   async startPublish(caller: Caller, buildingId: string, body: unknown) {
+    assertAdmin(caller);
     const id = assertId(buildingId, 'buildingId');
     await this.limit('publish', caller, id);
     const building = await this.requireBuilding(id);
-    assertPublish(caller.uid, building, this.deps.adminUid);
     const input = objectBody(body);
     const zones = this.parseZones(input.zones);
     const files = this.parseBuildingFiles(input.files);
@@ -243,16 +230,13 @@ export class PublishApi {
   }
 
   async commitPublish(caller: Caller, buildingId: string, publishId: string) {
+    assertAdmin(caller);
     const id = assertId(buildingId, 'buildingId');
     assertId(publishId, 'publishId');
     await this.limit('publish', caller, id);
-    const building = await this.requireBuilding(id);
-    assertPublish(caller.uid, building, this.deps.adminUid);
+    await this.requireBuilding(id);
     const publish = await this.deps.metadata.getPublish(id, publishId);
     if (!publish) throw new ApiError(404, 'not_found', 'That publish session does not exist.');
-    if (publish.uid !== caller.uid && caller.uid !== this.deps.adminUid) {
-      throw new ApiError(403, 'forbidden', 'This publish session belongs to another account.');
-    }
     if (publish.status === 'committed') {
       const current = await this.requireBuilding(id);
       return { buildingId: id, versionId: publish.versionId, activeVersion: current.activeVersion, committed: true };
@@ -291,6 +275,154 @@ export class PublishApi {
     return { buildingId: id, versionId: publish.versionId, activeVersion: publish.versionId, committed: true };
   }
 
+  async buildingDetail(caller: Caller, buildingId: string) {
+    const id = assertId(buildingId, 'buildingId');
+    await this.limit('list', caller, id);
+    const building = await this.requireBuilding(id);
+    const versions = [];
+    for (const versionId of await this.deps.metadata.listVersionIds(id)) {
+      const version = await this.deps.metadata.getVersion(id, versionId);
+      if (version) versions.push({ id: version.id, versionNumber: version.versionNumber, status: version.status });
+    }
+    versions.sort((a, b) => b.versionNumber - a.versionNumber);
+    return {
+      id: building.id,
+      name: building.name,
+      status: building.status,
+      activeVersion: building.activeVersion,
+      latitude: building.latitude ?? null,
+      longitude: building.longitude ?? null,
+      mapHeadingDegrees: building.mapHeadingDegrees ?? null,
+      metadataOnly: building.metadataOnly === true,
+      versions,
+    };
+  }
+
+  async versionDetail(caller: Caller, buildingId: string, versionId: string) {
+    const id = assertId(buildingId, 'buildingId');
+    const versionKey = assertId(versionId, 'versionId');
+    await this.limit('download', caller, id);
+    await this.requireBuilding(id);
+    const version = await this.deps.metadata.getVersion(id, versionKey);
+    if (!version) throw new ApiError(404, 'not_found', 'That map version is not published.');
+    return {
+      buildingId: id,
+      version,
+      zones: await this.deps.metadata.listZones(id, versionKey),
+      floors: await this.deps.metadata.listFloors(id, versionKey),
+    };
+  }
+
+  async listRecords(caller: Caller) {
+    await this.limit('list', caller, 'catalog');
+    const records: { path: string; data: Record<string, unknown> }[] = [];
+    for (const building of await this.deps.metadata.listBuildings()) {
+      if (building.id === 'firebase-test') continue;
+      records.push({ path: `buildings/${building.id}`, data: buildingData(building) });
+      for (const versionId of await this.deps.metadata.listVersionIds(building.id)) {
+        const version = await this.deps.metadata.getVersion(building.id, versionId);
+        if (version) records.push({ path: `buildings/${building.id}/versions/${versionId}`, data: { ...version } });
+        for (const zone of await this.deps.metadata.listZones(building.id, versionId)) {
+          records.push({ path: `buildings/${building.id}/versions/${versionId}/zones/${zone.id}`, data: { ...zone } });
+        }
+        for (const floor of await this.deps.metadata.listFloors(building.id, versionId)) {
+          records.push({ path: `buildings/${building.id}/versions/${versionId}/floors/${floor.id}`, data: { ...floor } });
+        }
+      }
+      for (const publish of await this.deps.metadata.listPublishes(building.id)) {
+        records.push({ path: `buildings/${building.id}/publishes/${publish.id}`, data: { ...publish } });
+      }
+    }
+    records.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true }));
+    return { records };
+  }
+
+  async saveRecord(caller: Caller, body: unknown) {
+    assertAdmin(caller);
+    const input = objectBody(body);
+    const path = stringField(input, 'path', 'path').trim();
+    if (!parseRecordPath(path)) throw new ApiError(400, 'invalid_path', 'That record path is not editable.');
+    const before = objectBody(input.before);
+    const after = objectBody(input.after);
+    await this.limit('publish', caller, 'records');
+    const result = await this.deps.metadata.patchRecord(path, before, after);
+    if (result === 'missing') throw new ApiError(404, 'not_found', 'That record does not exist.');
+    if (result === 'conflict') throw new ApiError(409, 'conflict', 'The record changed. Refresh before saving.');
+    return { path, saved: true };
+  }
+
+  async signEditUpload(caller: Caller, body: unknown) {
+    assertAdmin(caller);
+    const input = objectBody(body);
+    const path = stringField(input, 'path', 'path').trim();
+    const parsed = parseObjectPath(path);
+    if (!parsed) throw new ApiError(400, 'invalid_path', 'That storage path is not a package file.');
+    await this.limit('publish', caller, parsed.buildingId);
+    await this.requireBuilding(parsed.buildingId);
+    const version = await this.deps.metadata.getVersion(parsed.buildingId, parsed.versionId);
+    if (!version) throw new ApiError(404, 'not_found', 'That map version is not published.');
+    const contentType = uploadContentType(path, input.contentType);
+    const max = uploadLimit(path);
+    const size = input.size;
+    if (typeof size !== 'number' || !Number.isInteger(size) || size < 1 || size > max) {
+      throw new ApiError(413, 'too_large', `That file must be between 1 and ${max} bytes.`);
+    }
+    const expiresAt = new Date(this.deps.now().getTime() + this.uploadTtlMs);
+    return {
+      path,
+      method: 'PUT',
+      url: await this.deps.objects.signUpload(path, contentType, expiresAt),
+      headers: { 'Content-Type': contentType },
+      expiresAt: expiresAt.toISOString(),
+    };
+  }
+
+  async movePointer(caller: Caller, buildingId: string, body: unknown) {
+    assertAdmin(caller);
+    const id = assertId(buildingId, 'buildingId');
+    await this.limit('publish', caller, id);
+    const input = objectBody(body);
+    const versionId = assertId(stringField(input, 'versionId', 'versionId'), 'versionId');
+    const zoneId = optionalString(input.zoneId) ?? '';
+    if (zoneId) assertId(zoneId, 'zoneId');
+    const kind = stringField(input, 'kind', 'kind');
+    const path = stringField(input, 'path', 'path').trim();
+    const marker = bounded(stringField(input, 'marker', 'marker'), 'marker', 80);
+    const expectedPath = typeof input.expectedPath === 'string' ? input.expectedPath : '';
+    const expectedMarker = typeof input.expectedMarker === 'string' ? input.expectedMarker : '';
+    const parsed = parseObjectPath(path);
+    if (!parsed || parsed.buildingId !== id || parsed.versionId !== versionId) {
+      throw new ApiError(400, 'invalid_path', 'That file is not in this map version.');
+    }
+    const fields = pointerFields(kind);
+    if (kind === 'graph' && !path.includes('/graph-edits/') && !path.endsWith('/building.json')) {
+      throw new ApiError(400, 'invalid_path', 'A graph edit must be stored as building.json.');
+    }
+    const version = await this.deps.metadata.getVersion(id, versionId);
+    if (!version) throw new ApiError(404, 'not_found', 'That map version is not published.');
+    const name = kind === 'graph' ? 'building.json' : kind === 'layout' ? 'building-layout.json' : 'zone-connections.json';
+    const stat = await this.deps.objects.stat(path);
+    if (!stat) throw new ApiError(400, 'missing_object', 'Upload the file before updating the pointer.');
+    if (stat.size > FILE_LIMITS[name]) throw new ApiError(413, 'too_large', `${name} exceeds its size limit.`);
+    const bytes = await this.deps.objects.read(path, FILE_LIMITS[name]);
+    const zoneForSchema = name === 'building.json' && !zoneId ? zoneIdFromPackage(bytes) : zoneId;
+    validatePackageObject(name, bytes, zoneForSchema);
+    const result = await this.deps.metadata.updatePointer({
+      buildingId: id,
+      versionId,
+      zoneId: kind === 'graph' ? zoneId : '',
+      pathField: fields.path,
+      markerField: fields.marker,
+      path,
+      marker,
+      expectedPath,
+      expectedMarker,
+    });
+    if (result === 'missing') throw new ApiError(404, 'not_found', 'That map record does not exist.');
+    if (result === 'conflict') throw new ApiError(409, 'conflict', 'The map changed while you were editing. Reload before saving.');
+    return { path, marker, updated: true };
+  }
+
   private commitWrite(publish: PublishRecord): CommitWrite {
     const uploaded = new Map(publish.files.map(file => [`${file.zoneId}:${file.name}`, file.path]));
     const replaced = new Set(publish.zones.map(zone => zone.zoneId));
@@ -309,6 +441,13 @@ export class PublishApi {
         worldMapPath: uploaded.get(`${zone.zoneId}:worldmap.bin`),
         surfaceColorsPath: uploaded.get(`${zone.zoneId}:surface-colors.json`),
         surfaceColorAtlasPath: uploaded.get(`${zone.zoneId}:surface-colors.jpg`),
+        transformsPath: uploaded.get(`${zone.zoneId}:transforms.json`),
+        gaussianSplatPath: uploaded.get(`${zone.zoneId}:gaussian-splat.json`),
+        gaussianSplatDataPath: uploaded.get(`${zone.zoneId}:gaussian-splat.spz`)
+          ?? uploaded.get(`${zone.zoneId}:gaussian-splat.ply`)
+          ?? uploaded.get(`${zone.zoneId}:gaussian-splat.splat`),
+        texturedMeshPath: uploaded.get(`${zone.zoneId}:textured-mesh.glb`),
+        texturedMeshMetadataPath: uploaded.get(`${zone.zoneId}:textured-mesh.json`),
       });
     }
     const floors = new Map(publish.carry.floors.map(floor => [floor.id, floor]));
@@ -356,7 +495,7 @@ export class PublishApi {
     };
   }
 
-  private async signZone(buildingId: string, versionId: string, zone: ZoneRecord, expiresAt: Date) {
+  private async signZone(buildingId: string, versionId: string, zone: ZoneRecord, expiresAt: Date, lenient: boolean) {
     const files = [
       ['building.json', zone.buildingJsonPath, true],
       ['scan.json', zone.scanJsonPath, true],
@@ -365,6 +504,13 @@ export class PublishApi {
       ['worldmap.bin', zone.worldMapPath, true],
       ['surface-colors.json', zone.surfaceColorsPath, false],
       ['surface-colors.jpg', zone.surfaceColorAtlasPath, false],
+      ['transforms.json', zone.transformsPath, false],
+      ['gaussian-splat.json', zone.gaussianSplatPath, false],
+      ['gaussian-splat.spz', zone.gaussianSplatDataPath?.endsWith('gaussian-splat.spz') ? zone.gaussianSplatDataPath : undefined, false],
+      ['gaussian-splat.ply', zone.gaussianSplatDataPath?.endsWith('gaussian-splat.ply') ? zone.gaussianSplatDataPath : undefined, false],
+      ['gaussian-splat.splat', zone.gaussianSplatDataPath?.endsWith('gaussian-splat.splat') ? zone.gaussianSplatDataPath : undefined, false],
+      ['textured-mesh.glb', zone.texturedMeshPath, false],
+      ['textured-mesh.json', zone.texturedMeshMetadataPath, false],
     ] as const;
     const signed = [];
     for (const [name, stored, required] of files) {
@@ -372,7 +518,7 @@ export class PublishApi {
       const path = stored && parseObjectPath(stored)?.buildingId === buildingId ? stored : canonical;
       const stat = await this.deps.objects.stat(path);
       if (!stat) {
-        if (required) throw new ApiError(409, 'package_incomplete', `${path} is missing, so the package was not issued.`);
+        if (required && !lenient) throw new ApiError(409, 'package_incomplete', `${path} is missing, so the package was not issued.`);
         continue;
       }
       signed.push({
@@ -384,15 +530,23 @@ export class PublishApi {
         expiresAt: expiresAt.toISOString(),
       });
     }
-    return { zoneId: zone.id, name: zone.name, floorId: zone.floorId, files: signed };
+    return { zoneId: zone.id, name: zone.name, floorId: zone.floorId, graphRevision: zone.webGraphRevision ?? '', files: signed };
   }
 
-  private async signVersionFiles(buildingId: string, versionId: string, version: { buildingLayoutPath?: string | null; zoneConnectionsPath?: string | null }, expiresAt: Date) {
+  private async signVersionFiles(buildingId: string, versionId: string, version: { buildingLayoutPath?: string | null; zoneConnectionsPath?: string | null; buildingJsonPath?: string | null; scanFeaturesPath?: string | null; structurePath?: string | null }, expiresAt: Date, legacy: boolean) {
     const files = [];
     const candidates: [string, string | null | undefined][] = [
       ['zone-connections.json', version.zoneConnectionsPath],
       ['building-layout.json', version.buildingLayoutPath],
     ];
+    if (legacy) {
+      candidates.push(
+        ['building.json', version.buildingJsonPath],
+        ['scan.json', null],
+        ['scan-features.json', version.scanFeaturesPath],
+        ['structure.usdz', version.structurePath],
+      );
+    }
     for (const [name, stored] of candidates) {
       const path = stored && parseObjectPath(stored)?.buildingId === buildingId ? stored : objectPath(buildingId, versionId, name);
       if (!(await this.deps.objects.stat(path))) continue;
@@ -499,10 +653,13 @@ export class PublishApi {
   }
 
   private async limit(action: Action, caller: Caller, buildingId: string) {
+    // Viewing is public. Anonymous list/download calls were sharing one transaction
+    // per IP and canceling each other. Only signed-in traffic, and every publish, is counted.
+    if (caller.anonymous && action !== 'publish') return;
     const quota = this.quotas[action];
     const { windowStart, retryAfterSeconds } = rateWindow(quota, this.deps.now());
     const keys = (['user', 'building', 'ip'] as const).map(kind => ({
-      id: rateKey(action, kind, kind === 'user' ? caller.uid : kind === 'ip' ? caller.ip : buildingId, windowStart),
+      id: rateKey(action, kind, kind === 'user' ? (caller.anonymous ? `anon:${caller.ip}` : caller.uid) : kind === 'ip' ? caller.ip : buildingId, windowStart),
       limit: quota[kind],
     })).sort((a, b) => a.id < b.id ? -1 : 1);
     const result = await this.deps.counters.consume(keys);
@@ -559,4 +716,36 @@ function placement(input: Record<string, unknown>) {
 function optionalNumber(value: unknown) {
   if (value == null || value === '') return undefined;
   return numberField(value, 'coordinate');
+}
+
+function pointerFields(kind: string): { path: 'buildingJsonPath' | 'buildingLayoutPath' | 'zoneConnectionsPath'; marker: 'webGraphRevision' | 'webBuildingLayoutRevision' | 'webZoneConnectionsRevision' } {
+  if (kind === 'graph') return { path: 'buildingJsonPath', marker: 'webGraphRevision' };
+  if (kind === 'layout') return { path: 'buildingLayoutPath', marker: 'webBuildingLayoutRevision' };
+  if (kind === 'connections') return { path: 'zoneConnectionsPath', marker: 'webZoneConnectionsRevision' };
+  throw new ApiError(400, 'invalid_json', 'kind must be graph, layout, or connections.');
+}
+
+function uploadContentType(path: string, contentType: unknown) {
+  if (path.includes('/graph-edits/')) {
+    if (contentType !== 'application/json') throw new ApiError(400, 'invalid_file', 'Graph edits must use application/json.');
+    return 'application/json';
+  }
+  return contentTypeFor(path.split('/').pop() || '', contentType);
+}
+
+function uploadLimit(path: string) {
+  if (path.includes('/graph-edits/')) return FILE_LIMITS['building.json'];
+  const name = path.split('/').pop() || '';
+  const max = FILE_LIMITS[name];
+  if (!max) throw new ApiError(400, 'invalid_file', `${name} is not a package file.`);
+  return max;
+}
+
+function zoneIdFromPackage(bytes: Buffer) {
+  try {
+    const value = JSON.parse(bytes.toString('utf8')) as { zoneId?: unknown };
+    return typeof value.zoneId === 'string' ? value.zoneId : '';
+  } catch {
+    return '';
+  }
 }

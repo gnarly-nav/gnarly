@@ -1,0 +1,19 @@
+{
+  "name": "gnarly-infra",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bundle": "node bundle.mjs",
+    "synth": "npm run bundle && cdk synth",
+    "diff": "cdk diff"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.220.0",
+    "constructs": "^10.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "aws-cdk": "^2.220.0",
+    "typescript": "^5.9.3"
+  }
+}

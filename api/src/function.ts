@@ -1,8 +1,8 @@
 import { onRequest } from 'firebase-functions/v2/https';
-import { createFirebaseDeps } from './firebaseBackend.ts';
+import { createDeps } from './backend.ts';
 import { createHandler } from './http.ts';
 
-const handler = createHandler(createFirebaseDeps());
+const handler = createHandler(createDeps());
 
 /** Cloud Functions (2nd gen, Cloud Run) entry. The same handler serves Cloud Run via src/main.ts. */
 export const api = onRequest({

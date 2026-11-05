@@ -1,5 +1,24 @@
 # Publish API
 
+Clients talk to this service for list, download, and publish. `GNARLY_BACKEND=aws` uses DynamoDB, S3, and Cognito. Leave it unset, or set `firebase`, to keep the Firebase backend. See [docs/aws.md](../docs/aws.md) for the AWS deploy.
+
+Reads (list, package, download URLs, record browse) are public, including anonymous callers. Every write — create, publish, presigned PUT, pointer move, record edit — requires a bearer token whose `email` is listed in `ADMIN_EMAILS` (default `nj277@cornell.edu`) and whose `email_verified` claim is true. On AWS that token is a Cognito **ID** token. On Firebase it is still a Firebase ID token, and the same email rule applies.
+
+## AWS locally
+
+```sh
+cd api
+npm install
+cp .env.example .env
+# fill nothing else if the defaults match the provisioned account
+set -a && source .env && set +a
+npm start
+```
+
+The process role needs read/write on table `gnarly` (including index `GSI1`) and get/put/list on `gnarly-data-402275401617-us-east-1`. Deploying that role is `infra/`, not this process.
+
+## Firebase
+
 Clients used to read and write Firebase directly. This service is the gate for list, download, and publish.
 
 1. The caller sends a Firebase ID token.
@@ -10,10 +29,11 @@ Clients used to read and write Firebase directly. This service is the gate for l
 
 A failed upload or a failed check leaves the previous active map in place. Zones already on that map are carried forward by path; their bytes are not rewritten.
 
-## ACL
+## Access
 
-- `ownerUid`, an `acl` entry of `owner` or `editor`, or `GNARLY_ADMIN_UID` can publish.
-- `visibility: "members"` limits download to owner, editor, viewer, and admin. Anything else allows any signed-in user to download a published map.
+- Anyone, signed in or not, can list buildings and download a published package. Presigned GETs are reads.
+- Presigned PUTs, publish, commit, pointer updates, and record edits require the verified admin email.
+- `ownerUid` on imported rows is null and is not an authorization check. `GNARLY_ADMIN_UID` is no longer a write bypass.
 - Client Firestore writes cannot change `activeVersion`. Storage rules do not grant client reads or package writes; signed URLs bypass those rules.
 
 ## Run locally

@@ -31,6 +31,9 @@ navigator-unity/FirebaseConfig/
 web/node_modules/
 api/node_modules/
 api/dist/
+infra/node_modules/
+infra/build/
+infra/cdk.out/
 web/dist/
 web/*.tsbuildinfo
 

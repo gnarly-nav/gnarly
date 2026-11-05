@@ -8,7 +8,7 @@ npm install
 npm run dev
 ```
 
-For a built deployment with the same Storage download behavior, run `npm run build && npm start`. The Node server serves `dist/` and proxies downloads only from this project's configured Firebase Storage bucket. A static-only host would still need bucket CORS configured.
+For a built deployment, run `npm run build && npm start`. The Node server serves `dist/` and proxies signed downloads for the S3 bucket (and a Firebase bucket only if `FIREBASE_STORAGE_BUCKET` is set). A static host can fetch the presigned S3 URLs directly; that bucket already allows this site's origin.
 
 The site opens in a labeled sample mode centered on the Cornell area. The **North Hall** building, floor layout, destinations, and two-floor route are illustrative. Add `VITE_GOOGLE_MAPS_API_KEY` to `web/.env` to use Google Maps. Without it, OpenStreetMap remains available.
 
@@ -21,30 +21,32 @@ The site opens in a labeled sample mode centered on the Cornell area. The **Nort
 
 Browser API keys are visible in the site bundle; HTTP referrer and API restrictions are the relevant protections. Do not use a service-account key here.
 
-## Connect Firebase
+## Connect the cloud API
 
-1. In the **same existing Firebase project**, go to **Project settings → General → Your apps → Add app → Web**. Name it `Gnarly web`. Hosting setup is optional. Copy the public Firebase config object into `web/.env` using `.env.example` as a template. Never put a service-account key in this file.
-2. Enable Email/Password sign-in for an existing authorized user. The repository rules require authentication for all reads. Use **Connect Firebase** in the website to sign in; credentials go directly to Firebase Auth. Set `VITE_GNARLY_API_BASE` to the publish API. Building list and package download use that API, which checks access and returns short-lived signed URLs.
-3. A building document at `buildings/{id}` needs `name`, `status`, and `activeVersion`. To show it on the map, add a `location` GeoPoint or `latitude` and `longitude` fields. The current Swift `Building` model has no location fields, so existing records without them appear in search but cannot have a map marker.
-4. The mapper now uploads each zone beneath `buildings/{id}/{activeVersion}/zones/{zoneId}/`. The web app reads zone documents at `buildings/{id}/versions/{activeVersion}/zones/{zoneId}` and their `buildingJsonPath` and `scanFeaturesPath` fields. It also supports the earlier version-level paths for older packages.
+1. Copy `web/.env.example` to `web/.env`. `VITE_GNARLY_API_BASE` defaults to the deployed Function URL. Set `VITE_COGNITO_REDIRECT_URI` to `http://localhost:5173/` for local dev, or `https://naijei.com/gnarly/` for the hosted site. Set `VITE_BASE=/gnarly/` only for that hosted build. Do not put a secret in this file.
+2. Anyone can view buildings. **Sign in with Google** is only for editing, and only `nj277@cornell.edu` (or `VITE_ADMIN_EMAILS`) with a verified email sees the edit UI. The API enforces the same rule from the Cognito ID token. Email and password remain a fallback. This app does not create Cognito users.
+3. A building item needs `name`, `status`, and `activeVersion`. Latitude and longitude place it on the map. Records without them appear in search but cannot have a map marker.
+4. Objects stay at `buildings/{id}/{version}/...` (the same keys as Firebase Storage, including keys that contain spaces). Version, zone, and floor rows live in the DynamoDB table `gnarly`. The browser downloads presigned S3 URLs directly. Bucket CORS already allows `https://naijei.com` and `http://localhost:5173`.
 
-The waypoint editor reads and writes graph packages in Firebase Storage, then advances the Firestore zone pointer in a transaction. It does not change security rules. Buildings with missing active versions or package assets show an unavailable state. The iOS export schema is zone-based. The website combines zones into one building graph using `building-layout.json` and `zone-connections.json`; see **Zones, floors, and elevators** below.
+For a built deployment, `npm run build && npm start` still proxies signed URLs through `/__signed`, now for the S3 bucket as well as a Firebase bucket if `FIREBASE_STORAGE_BUCKET` is set. Static hosting should use the presigned URL directly; S3 CORS covers the site origin.
+
+The waypoint editor reads and writes graph packages through the publish API. An edit uploads `graph-edits/<uuid>.json` with a presigned PUT, then moves the zone pointer only if it has not changed. Buildings with missing active versions or package assets show an unavailable state. The iOS export schema is zone-based. The website combines zones into one building graph using `building-layout.json` and `zone-connections.json`; see **Zones, floors, and elevators** below.
 
 ### Browser downloads and CORS
 
-The website asks the publish API for a signed Storage URL, then the same-origin server fetches that URL from `storage.googleapis.com`. Local development and `npm start` do not need a bucket CORS change for those downloads. The current `main-building` active version `v1` has readable graphs in zones `1`, `2`, and `zone-a`, but none of those zones has `scan-features.json` or `scan.json` at its declared/fallback path. The viewer therefore shows the navigation graph and a missing-scan notice. The mapper must upload the missing RoomPlan files before the site can draw actual walls for that version.
+The website asks the publish API for a signed URL and fetches it in the browser. On AWS that URL is an S3 presigned GET. `https://naijei.com` and `http://localhost:5173` are already allowed by the bucket CORS, including for a static host with no Node proxy. `npm start` can still proxy the same URL through `/__signed`.
 
-If the site is deployed as static files without the Node server, the bucket owner should inspect existing CORS rules and add the deployed origin with `GET`. A local sample rule is in `firebase/cors.web.local.json`. For a bucket with no other CORS needs, they can apply it from the repository root with:
+If a Firebase bucket is still in use, a static host needs that bucket's CORS to allow the site origin with `GET`. A local sample rule is in `firebase/cors.web.local.json`. For a bucket with no other CORS needs, they can apply it from the repository root with:
 
 ```sh
 gcloud storage buckets update gs://gnarly-e65c1.firebasestorage.app --cors-file=firebase/cors.web.local.json
 ```
 
-The update replaces the bucket's CORS configuration, so merge this rule with any existing rules first. Add the deployed website origin before deployment. Keep Firebase Storage read rules authenticated as they are; CORS only controls which browser origins can request the files.
+The update replaces a Firebase bucket's CORS configuration, so merge this rule with any existing rules first. The AWS bucket is already configured for this site and does not need that command.
 
-## Firebase data workspace
+## Project data workspace
 
-Use **Firebase data** in the site header after signing in. It lists building documents, versions, floors, zones, destinations, nodes, and edges in Firestore. Select a document to inspect its JSON. The account named as admin in `firebase/firestore.rules` can edit existing documents: change the JSON, review changed or removed top-level fields, then save. Saves use a Firestore transaction and reject stale data if another edit occurred meanwhile. Signed-in non-admin accounts can browse without editing. The workspace can also preview JSON files linked by a zone's `buildingJsonPath`, `scanFeaturesPath`, or `scanJsonPath`; scan assets are read-only here, while the waypoint editor saves a new graph JSON package. Scan uploads still go through the mapper.
+Use **Data** in the site header. It lists building, version, floor, zone, and publish records from the API. Anyone can read them. The verified admin email can edit a document: change the JSON, review changed or removed top-level fields, then save. Saves are rejected if the record changed since it was opened. The workspace can also preview JSON files linked by a zone's `buildingJsonPath`, `scanFeaturesPath`, or `scanJsonPath`. Scan uploads still go through the mapper.
 
 ## 3D assets
 
@@ -62,9 +64,9 @@ Walk mode stays inside the selected floor boundary. Hold Shift to run. Standing 
 
 The building explorer has two modes. **View paths** picks a start and destination anywhere in the building, draws the route across zones and floors, and lists its steps (walk legs, "Continue into …", "Take the elevator from … to …"); clicking a leg shows that floor. **Edit map** edits one zone's waypoints at a time; pick the zone from **Editing zone** or click a waypoint in another zone. Select, add by clicking a floor, move by clicking a floor or entering XYZ meters, edit name/type/floor, connect two waypoints, or delete a waypoint and its incident edges. The site preserves existing waypoint IDs. Its coordinates are the package's ARKit world coordinates. An affected edge's `meters` is recalculated from 3D endpoint distance when a waypoint moves. The editor validates IDs, endpoints, floors, distances, floor surfaces, walls, and stair transitions before saving. Existing blocked connections are shown and excluded from routes; an unrelated edit may be saved, but newly blocked connections must be fixed. Cancel restores the last saved graph. Unsaved graph edits and unapplied waypoint fields are backed up in session storage for the current tab, so they survive refresh and in-app navigation without replacing a draft in another tab. Closing the tab ends that draft session; save first. Leaving prompts before navigation. Apply waypoint fields before saving the graph. Cancel restores the latest saved graph, including a newer revision received during a conflict.
 
-**Local test · browser only** is available without Firebase credentials. Its graph uses the same `GraphStore` interface as Firebase, saves in browser storage, and is always labeled **not synced**. The Firebase mode requires the authorized account from the existing rules. It writes an immutable `graph-edits/<uuid>.json` object in the zone's existing Storage folder, then atomically moves that zone's Firestore `buildingJsonPath` pointer if the pointer has not changed. Other open web clients reload through a Firestore listener and periodic check. A changed pointer while a local draft exists raises a conflict and keeps the draft. The previous graph object remains in Storage. The Unity navigator and mapper package download now accept that pointer path; installed iOS/Unity builds need rebuilding to pick up the change. The mapper can still publish another package and move the pointer again.
+**Local test · browser only** saves in browser storage and is labeled **not synced**. Cloud mode is available to the verified admin. It writes an immutable `graph-edits/<uuid>.json` object with a presigned PUT, then conditionally moves that zone's `buildingJsonPath` pointer if the pointer has not changed. Other open web clients reload on a periodic check. A changed pointer while a local draft exists raises a conflict and keeps the draft. The previous graph object remains in the bucket. The Unity navigator and mapper package download accept that pointer path.
 
-Firebase writes need the existing admin Auth UID and Storage/Firestore rules to allow writes. No rules were loosened. Bucket CORS for browser uploads also needs this site's origin and the upload methods (`POST` and `PUT`; the browser sends an `OPTIONS` preflight) alongside the existing read methods; inspect and merge the bucket's current CORS settings before applying anything. Firebase save and cross-client synchronization still require a live authorized check. A failed save retains the local draft and shows **Save failed**.
+Cloud saves require the verified admin email. The API rejects everyone else, and the edit controls stay hidden. A presigned PUT from the browser needs the bucket CORS to allow `PUT` from this origin (GET is already allowed for `https://naijei.com` and `http://localhost:5173`). A failed save retains the local draft and shows **Save failed**.
 
 **Auto-connect waypoints** adds visibility edges inside the editing zone, like the Unity navigator's `ConnectVisibility`: same floor, 0.2–18 m apart, and only where the scan check passes (so through doors, never walls). It skips pairs that are both plain walk-path points and needs `scan-features.json`. Review the added edges, then save.
 
@@ -80,7 +82,7 @@ A building has floors, and a floor is made of one or more scanned zones. Each zo
 - **Move whole floor** (under **Zone placement**) shifts or turns every zone on the editing zone's floor together, by the chosen step, keeping their joins. **Align floor to elevators** moves the floor so its elevators sit directly above or below the elevators they are linked to, using the linked floor with the most elevator links. One elevator fixes position; two or more also fix rotation. Save the zone placement afterwards.
 - **Elevator links** connect elevator waypoints on different floors and act as a teleport. They don't move floors on their own (use **Align floor to elevators**), and the zones stay separate. Linked elevators form a shaft. Riding between any two floors in a shaft costs 30 + 6 per floor travelled, the same as Unity's `Pathfinding.cs`. Use **Edit map → Elevators between floors** to link an existing elevator or place a matching one in a zone on the destination floor. Linking two elevators on the same floor is rejected.
 
-Zone links and layout are stored with the rest of the data mode: browser storage in **Local test** (keys `gnarly-local-zone-links:…` and `gnarly-local-layout:…`), or `zone-connections.json` and `building-layout.json` in Firebase mode. The sample North Hall shows all three: Floor 1 west and Floor 1 east (scanned at a 90° rotation) joined by two continuation pairs, and an elevator up to Floor 2.
+Zone links and layout are stored with the rest of the data mode: browser storage in **Local test** (keys `gnarly-local-zone-links:…` and `gnarly-local-layout:…`), or `zone-connections.json` and `building-layout.json` in cloud mode. The sample North Hall shows all three: Floor 1 west and Floor 1 east (scanned at a 90° rotation) joined by two continuation pairs, and an elevator up to Floor 2.
 
 Run `npm test` from `web/` for the wall, doorway, corner, stairs, edit, auto-connect, alignment, and building-route checks.
 
@@ -88,6 +90,6 @@ Run `npm test` from `web/` for the wall, doorway, corner, stairs, edit, auto-con
 
 Run `npm test` and `npm run build` from `web/`. Regression tests cover walls and door detours, concave floors and small gaps, portals on another story, directed edges, invalid distances, empty-floor placement, preserving recorded distances during a rename, trusted walked edges, auto-connect, zone alignment, and continuation/elevator building routes.
 
-Browser checks cover local save/refresh, unapplied-field leave warnings, two-tab conflicts and Cancel, route selection, typing while walking, and a 390px-wide editing/route layout. The data browser now filters documents, reports load errors without requiring a selected record, and warns before discarding JSON changes through header navigation or reload. Firebase graph writes and device consumption still need an authorized live end-to-end check.
+Browser checks cover local save/refresh, unapplied-field leave warnings, two-tab conflicts and Cancel, route selection, typing while walking, and a 390px-wide editing/route layout. The data browser filters documents, reports load errors without requiring a selected record, and warns before discarding JSON changes through header navigation or reload. Cloud graph writes still need a live check as the verified admin.
 
-The 3D workspace and Firebase document editor load on demand. Large Three/Firebase bundles still produce Vite’s size advisory, but opening the map no longer downloads the 3D workspace.
+The 3D workspace and the record editor load on demand. Large bundles still produce Vite’s size advisory, but opening the map no longer downloads the 3D workspace.

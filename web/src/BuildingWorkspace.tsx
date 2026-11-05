@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Box, CloudUpload, Eye, Footprints, HardDrive, Keyboard, Link, Magnet, MapPinPlus, MousePointer2, Move3d, Pencil, PersonStanding, Redo2, Scan, Spline, Square, Undo2, X } from 'lucide-react';
 import Viewer, { type DropRequest, type FloorPick, type WalkLocation } from './Viewer';
 import type { Building, BuildingLayout, Graph, Node, ZoneConnection, ZoneConnections, ZoneView } from './data.ts';
-import { canEditFirebase } from './firebase.ts';
+import { useCanEdit } from './cloud.ts';
 import { pointOnFloor } from './geometry.ts';
 import { addWaypoint, autoConnect, connectWaypoints, deleteWaypoint, disconnectWaypoints, updateWaypoint, validateGraph } from './graphEdit.ts';
-import { copyGraph, createGraphStore, readLocalGraph, type GraphSnapshot } from './graphStore.ts';
+import { copyGraph, createGraphStore, createLoadedGraphStore, readLocalGraph, type GraphSnapshot } from './graphStore.ts';
 import { combineBuilding, elevatorFloorFit, findBuildingRoute, nodeKey, splitKey, zoneEdgeChecks, type ElevatorStop } from './buildingGraph.ts';
 import { loadBuildingMeta, saveConnections, saveLayout, type DataMode } from './buildingStore.ts';
 import { addZoneConnection, removeZoneConnection } from './zoneConnections.ts';
@@ -43,13 +43,17 @@ const TOOL_HINTS: Record<Tool, [string, string][]> = {
 
 export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChange}:Props) {
   const zones=useMemo(()=>zonesOf(building),[building]);
-  const [mode,setMode]=useState<DataMode>(building.demo||!canEditFirebase()?'local':'firebase');
+  const editor=useCanEdit();
+  const [mode,setMode]=useState<DataMode>(building.demo?'local':'cloud');
   const [tab,setTab]=useState<Tab>('view');
   const [editZoneId,setEditZoneId]=useState(()=>zones.some(zone=>zone.id===building.zoneId)?building.zoneId!:zones[0].id);
   const editZone=zones.find(zone=>zone.id===editZoneId)||zones[0];
   const [sessionGraphs,setSessionGraphs]=useState<Record<string,Graph>>({});
-  const savedZones=useMemo(()=>zones.map(zone=>({...zone,graph:sessionGraphs[zone.id]||(mode==='local'&&readLocalGraph(zoneBuilding(building,zone)))||zone.graph})),[zones,sessionGraphs,mode,building]);
-  const store=useMemo(()=>createGraphStore(zoneBuilding(building,editZone),mode),[building.id,building.activeVersion,editZone.id,mode]);
+  const savedZones=useMemo(()=>zones.map(zone=>({...zone,graph:sessionGraphs[zone.id]||(mode==='local'&&editor&&readLocalGraph(zoneBuilding(building,zone)))||zone.graph})),[zones,sessionGraphs,mode,building,editor]);
+  const store=useMemo(()=>{
+    const zone=zoneBuilding(building,editZone);
+    return editor?createGraphStore(zone,mode):createLoadedGraphStore(zone);
+  },[editor,mode,building.id,building.activeVersion,building.graph,building.graphPath,building.graphRevision,editZone.id,editZone.graph,editZone.graphPath,editZone.graphRevision]);
   const key=draftKey(building,mode,editZoneId);
 
   const [base,setBase]=useState<GraphSnapshot|null>(null),[draft,setDraft]=useState<Graph|null>(null),[draftOwner,setDraftOwner]=useState(''),[remote,setRemote]=useState<GraphSnapshot|null>(null);
@@ -97,7 +101,7 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
       if(!baseRef.current){
         try{
           const saved=sessionStorage.getItem(key)||localStorage.getItem(key);
-          if(saved){
+          if(saved && editor){
             const local=JSON.parse(saved) as {base:GraphSnapshot;graph:Graph};
             if(!local.base?.graph || !local.graph?.nodes || !local.graph?.edges)throw Error('Invalid draft');
             baseRef.current=local.base;setBase(local.base);setDraft(local.graph);setDraftOwner(zoneId);
@@ -112,7 +116,7 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
     store.load().then(snapshot=>{if(!receivedSubscription)received(snapshot)}).catch(e=>{if(live){setError(errorText(e));setStatus('failed')}});
     const unsubscribe=store.subscribe(snapshot=>{receivedSubscription=true;received(snapshot)},e=>{if(live)setError(e.message)});
     return()=>{live=false;unsubscribe()};
-  },[store,key]);
+  },[store,key,editor]);
   useEffect(()=>{if(!base||!activeDraft||loadedKey.current!==key)return;try{if(pending)sessionStorage.setItem(key,JSON.stringify({base,graph:activeDraft}));else sessionStorage.removeItem(key)}catch{setError('Browser draft backup is unavailable. Keep this tab open until you save.')}},[base,activeDraft,pending,key]);
   useEffect(()=>{if(!pending&&!layoutDirty)return;const guard=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue=''};window.addEventListener('beforeunload',guard);return()=>window.removeEventListener('beforeunload',guard)},[pending,layoutDirty]);
   useEffect(()=>{if(walker)sessionStorage.setItem(walkerKey(building),JSON.stringify({location:walker,walking} satisfies SavedWalker))},[walker,walking,building.id,building.activeVersion]);
@@ -227,8 +231,8 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
     try{
       const saved=await store.save(activeDraft,base);baseRef.current=saved;setBase(saved);setDraft(copyGraph(saved.graph));setDraftOwner(editZoneId);setStatus('saved');sessionStorage.removeItem(key);
       setSessionGraphs(previous=>({...previous,[editZoneId]:saved.graph}));
-      setNotice(mode==='firebase'?'Saved to Firebase.':'Saved in this browser only · not synced.');
-      if(mode==='firebase')onUpdate(editZoneId===ROOT?{...building,graph:saved.graph,graphPath:saved.path}:{...building,zones:building.zones?.map(zone=>zone.id===editZoneId?{...zone,graph:saved.graph,graphPath:saved.path}:zone),...(building.zoneId===editZoneId?{graph:saved.graph,graphPath:saved.path}:{})});
+      setNotice(mode==='cloud'?'Saved to the cloud.':'Saved in this browser only · not synced.');
+      if(mode==='cloud')onUpdate(editZoneId===ROOT?{...building,graph:saved.graph,graphPath:saved.path}:{...building,zones:building.zones?.map(zone=>zone.id===editZoneId?{...zone,graph:saved.graph,graphPath:saved.path}:zone),...(building.zoneId===editZoneId?{graph:saved.graph,graphPath:saved.path}:{})});
       return saved;
     }catch(e){setStatus('failed');setError(errorText(e));return null}
     finally{savingRef.current=false;void store.load().then(latest=>{if(latest.revision!==baseRef.current?.revision){setRemote(latest);setStatus('conflict')}}).catch(()=>{})}
@@ -271,12 +275,12 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
   function autoAlign(){const next=alignedLayout(editZoneId,connections,modelZones,layout);if(!next){setError('Join this zone to a neighbor first.');return}remember('re-fit zone');setLayout(next);setLayoutDirty(true);setNotice('Re-fitted to the joined zone(s).')}
   async function persistLayout(next=layout){
     setLayoutSaving(true);setError('');
-    try{const saved=await saveLayout(building,mode,next||{schemaVersion:1,zones:[]});setLayout(saved);setLayoutDirty(false);if(mode==='firebase')onUpdate({...building,layout:saved});setNotice('Zone placement saved'+(mode==='firebase'?' to Firebase.':' in this browser.'));return true}
+    try{const saved=await saveLayout(building,mode,next||{schemaVersion:1,zones:[]});setLayout(saved);setLayoutDirty(false);if(mode==='cloud')onUpdate({...building,layout:saved});setNotice('Zone placement saved'+(mode==='cloud'?' to the cloud.':' in this browser.'));return true}
     catch(e){setError(errorText(e));return false}finally{setLayoutSaving(false)}
   }
   async function persistConnections(next:ZoneConnections,message:string){
     setLinkSaving(true);setError('');
-    try{const saved=await saveConnections(building,mode,next);setConnections(saved);if(mode==='firebase')onUpdate({...building,zoneConnections:saved});setNotice(message);return true}
+    try{const saved=await saveConnections(building,mode,next);setConnections(saved);if(mode==='cloud')onUpdate({...building,zoneConnections:saved});setNotice(message);return true}
     catch(e){setError(errorText(e));return false}finally{setLinkSaving(false)}
   }
   async function link(connection:ZoneConnection,zoneViews:ZoneView[]){
@@ -391,7 +395,7 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
       setConnections(links);
       const placed=await saveLayout(building,mode,pinned(layout));
       setLayout(placed);setLayoutDirty(false);history.current={past:[],future:[],lastAt:0};
-      if(mode==='firebase'){
+      if(mode==='cloud'){
         const graphs:Record<string,GraphSnapshot>={[editZoneId]:savedA,[otherId]:savedB};
         onUpdate({...building,zones:building.zones?.map(zone=>graphs[zone.id]?{...zone,graph:graphs[zone.id].graph,graphPath:graphs[zone.id].path}:zone),zoneConnections:links,layout:placed});
       }
@@ -400,6 +404,7 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
     finally{savingRef.current=false;setJoining('')}
   }
   function changeTab(next:Tab){
+    if(next==='edit'&&!editor)return;
     if(next===tab)return;
     setTab(next);setTool('select');setBoundaryPlacement(null);setWalking(false);setPlacingWalker(false);setPlaying(false);
     if(next==='edit'&&place&&splitKey(place).zoneId!==editZoneId)switchZone(splitKey(place).zoneId);
@@ -419,7 +424,7 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
     if(k==='f'){setReset(value=>value+1);return}
     if(k==='t'){setCameraView(view=>view==='top'?'iso':'top');return}
     if(k==='?'||(event.shiftKey&&k==='/')){setShortcuts(value=>!value);return}
-    if(k==='e'&&!editing&&base){changeTab('edit');return}
+    if(k==='e'&&!editing&&base&&editor){changeTab('edit');return}
     if(k==='escape'&&shortcuts){setShortcuts(false);return}
     if(k==='escape'&&placingWalker){setPlacingWalker(false);return}
     if(!editing){if(k==='escape')setPlace('');return}
@@ -435,7 +440,7 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
   };
   useEffect(()=>{const handle=(event:KeyboardEvent)=>keyHandler.current(event);window.addEventListener('keydown',handle);return()=>window.removeEventListener('keydown',handle)},[]);
 
-  const statusText=status==='saved'&&!layoutDirty?(mode==='firebase'?'Synced':'Saved locally'):status==='saved'||status==='unsynced'?'Unsaved changes':status==='saving'?'Saving…':status==='conflict'?'Remote conflict':status==='failed'?(base?'Save failed':'Unable to load'):'Loading…';
+  const statusText=status==='saved'&&!layoutDirty?(mode==='cloud'?'Synced':'Saved locally'):status==='saved'||status==='unsynced'?'Unsaved changes':status==='saving'?'Saving…':status==='conflict'?'Remote conflict':status==='failed'?(base?'Save failed':'Unable to load'):'Loading…';
   const statusTone=status==='saved'&&!layoutDirty?'ok':status==='failed'||status==='conflict'?'bad':status==='loading'||status==='saving'?'busy':'warn';
   const changes=(dirty?1:0)+(layoutDirty?1:0);
   const canUndo=history.current.past.length>0,canRedo=history.current.future.length>0;
@@ -467,7 +472,7 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
       <div className="ws-title"><small><span className={'live-dot'+(building.demo?' demo':'')}/>{building.demo?'Sample building':'Live building'}</small><strong>{building.name}</strong></div>
       <div className="segmented" role="tablist">
         <button role="tab" aria-selected={!editing} className={!editing?'on':''} onClick={()=>changeTab('view')}><Eye size={13}/> Explore</button>
-        <button role="tab" aria-selected={editing} className={editing?'on':''} disabled={!base||status==='saving'} onClick={()=>changeTab('edit')} data-tip="Edit map  E"><Pencil size={13}/> Edit</button>
+        {editor&&<button role="tab" aria-selected={editing} className={editing?'on':''} disabled={!base||status==='saving'} onClick={()=>changeTab('edit')} data-tip="Edit map  E"><Pencil size={13}/> Edit</button>}
       </div>
     </header>
 
@@ -492,8 +497,8 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
       <ToolButton icon={<Undo2 size={17}/>} label="Undo" shortcut="Ctrl Z" disabled={!canUndo} onClick={undo}/>
       <ToolButton icon={<Redo2 size={17}/>} label="Redo" shortcut="Ctrl Shift Z" disabled={!canRedo} onClick={redo}/>
       <span className="tool-sep"/>
-      <button className={'save-btn'+(changes?' has-changes':'')} disabled={!changes||status==='saving'||layoutSaving||Boolean(issues.length)||Boolean(newBlocked.length)||Boolean(remote)} onClick={()=>void saveAll()} data-tip={(mode==='firebase'?'Save to Firebase':'Save in this browser')+'  Ctrl S'}>
-        {mode==='firebase'?<CloudUpload size={15}/>:<HardDrive size={15}/>}{status==='saving'||layoutSaving?'Saving…':'Save'}{changes>0&&<span className="save-count">{changes}</span>}
+      <button className={'save-btn'+(changes?' has-changes':'')} disabled={!changes||status==='saving'||layoutSaving||Boolean(issues.length)||Boolean(newBlocked.length)||Boolean(remote)} onClick={()=>void saveAll()} data-tip={(mode==='cloud'?'Save to the cloud':'Save in this browser')+'  Ctrl S'}>
+        {mode==='cloud'?<CloudUpload size={15}/>:<HardDrive size={15}/>}{status==='saving'||layoutSaving?'Saving…':'Save'}{changes>0&&<span className="save-count">{changes}</span>}
       </button>
     </div>}
 
@@ -540,7 +545,7 @@ export default function BuildingWorkspace({building,onBack,onUpdate,onDirtyChang
         {blocked.length>0&&<span className="pill blocked">{blocked.length} blocked</span>}
         {unverified>0&&<span className="pill unverified">{unverified} unverified</span>}
         <span className={'sync '+statusTone}><i/>{statusText}</span>
-        <select aria-label="Data mode" className="mode-select" disabled={status==='saving'} value={mode} onChange={e=>modeChange(e.target.value as DataMode)}><option value="local">Local test</option>{!building.demo&&canEditFirebase()&&<option value="firebase">Firebase</option>}</select>
+        <select aria-label="Data mode" className="mode-select" disabled={status==='saving'} value={mode} onChange={e=>modeChange(e.target.value as DataMode)}><option value="local">Local test</option>{!building.demo&&editor&&<option value="cloud">Cloud</option>}</select>
         {pending&&<button className="btn ghost small" onClick={cancel}>Discard</button>}
       </div>
     </footer>}

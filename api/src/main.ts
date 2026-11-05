@@ -1,8 +1,8 @@
 import { createServer } from 'node:http';
-import { createFirebaseDeps } from './firebaseBackend.ts';
+import { createDeps } from './backend.ts';
 import { createHandler } from './http.ts';
 
-const handler = createHandler(createFirebaseDeps());
+const handler = createHandler(createDeps());
 const port = Number(process.env.PORT || 8080);
 
 createServer((req, res) => {

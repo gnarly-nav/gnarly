@@ -4,11 +4,11 @@ import { ArrowRight, Building2, ChevronRight, Database, LocateFixed, Navigation,
 import ExteriorMap from './ExteriorMap';
 import AuthDialog from './AuthDialog';
 import { demoBuilding, type Building } from './data';
-import { configured, watchUser, listBuildings, loadBuilding, loadPreviousBuildingVersion } from './firebase';
+import { completeOAuthRedirect, configured, currentEmail, watchUser, listBuildings, loadBuilding, loadPreviousBuildingVersion } from './cloud';
 import 'leaflet/dist/leaflet.css';
 import './style.css';
 const BuildingWorkspace = lazy(() => import('./BuildingWorkspace'));
-const FirebaseData = lazy(() => import('./FirebaseData'));
+const ProjectData = lazy(() => import('./ProjectData'));
 const failureMessage = (failure: unknown) => failure instanceof Error ? failure.message : String(failure);
 
 class ErrorBoundary extends React.Component<React.PropsWithChildren, { failed: boolean }> {
@@ -24,6 +24,7 @@ function App() {
   const [dataOpen, setDataOpen] = useState(false);
   const [live, setLive] = useState<Building[]>([]);
   const [user, setUser] = useState(false);
+  const [email, setEmail] = useState('');
   const [authOpen, setAuthOpen] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [loadingList, setLoadingList] = useState(false);
@@ -33,17 +34,18 @@ function App() {
   const [search, setSearch] = useState('');
   const [refresh, setRefresh] = useState(0);
   const selectionRequest = useRef(0);
-  useEffect(() => watchUser(u => setUser(Boolean(u))), []);
+  useEffect(() => watchUser(account => { setUser(Boolean(account)); setEmail(account?.email || ''); }), []);
+  useEffect(() => { void completeOAuthRedirect().then(result => { if (result.error) setAuthOpen(true); }); }, []);
   useEffect(() => {
     let active = true;
     setLoadError('');
-    if (!user) { setLive([]); setLoadingList(false); return; }
+    if (!configured) { setLive([]); setLoadingList(false); return; }
     setLoadingList(true);
     listBuildings().then(next => { if (active) setLive(next); })
       .catch(e => { if (active) setLoadError(failureMessage(e)); })
       .finally(() => { if (active) setLoadingList(false); });
     return () => { active = false; };
-  }, [user, refresh]);
+  }, [refresh]);
   const buildings = [demoBuilding, ...live];
   const query = search.trim().toLowerCase();
   const filtered = buildings.filter(b => b.name.toLowerCase().includes(query) || b.graph?.nodes.some(n => n.label?.toLowerCase().includes(query)));
@@ -77,12 +79,12 @@ function App() {
       <button className="brand" onClick={home} aria-label="Gnarly home"><span className="brand-mark"><Navigation size={20}/></span><span>gnarly<span className="brand-dot">.</span></span></button>
       <div className="top-label">Indoor navigation</div>
       <div className="top-actions">
-        <button className={'data-nav '+(dataOpen?'active':'')} onClick={openData} aria-label="Firebase data"><Database size={15}/> Data</button>
-        <button className={'account '+(user?'connected':'')} aria-label={user?'Firebase account':'Connect Firebase'} onClick={() => setAuthOpen(true)}><ShieldCheck size={15}/>{user?'Connected':'Sign in'}</button>
+        <button className={'data-nav '+(dataOpen?'active':'')} onClick={openData} aria-label="Project data"><Database size={15}/> Data</button>
+        <button className={'account '+(user?'connected':'')} aria-label={user?'Account':'Sign in'} onClick={() => setAuthOpen(true)}><ShieldCheck size={15}/>{user?'Signed in':'Sign in'}</button>
       </div>
     </header>
     <Suspense fallback={<div className="page-loading" role="status"><span className="loading-ring"/>Opening explorer…</div>}>
-      {dataOpen ? <FirebaseData connected={user} onDirtyChange={setDataDirty} onClose={() => {setDataOpen(false);setDataDirty(false)}} onConnect={() => setAuthOpen(true)}/>
+      {dataOpen ? <ProjectData available={configured} onDirtyChange={setDataDirty} onClose={() => {setDataOpen(false);setDataDirty(false)}} onConnect={() => setAuthOpen(true)}/>
         : inside && selected?.graph ? <BuildingWorkspace key={selected.id+':'+selected.activeVersion} building={selected} onBack={back} onUpdate={setSelected} onDirtyChange={setWorkspaceDirty}/>
         : <main className={'map-area '+(selected?'has-selection':'')}>
           <ExteriorMap buildings={buildings} selected={selected} onSelect={select}/><div className="map-tint"/>
@@ -91,7 +93,7 @@ function App() {
             <div className="map-intro"><h1>Find your way inside</h1><p>Pick a building to explore its floors and preview a route.</p></div>
             <div className="list-head"><span>Buildings</span><span role="status">{loadingList?'Loading…':filtered.length+' found'}</span></div>
             <div className="building-list">{filtered.map(b => <button className={'building-row '+(selected?.id===b.id?'active':'')} key={b.id} onClick={() => void select(b)}><span className="building-icon"><Building2 size={21}/></span><span className="building-copy"><strong>{b.name}</strong><small>{b.demo?'Sample building · 2 floors':b.graph?'Indoor map available':b.activeVersion?'Open to load indoor map':'Indoor map unavailable'}</small></span><ChevronRight size={18}/></button>)}{!filtered.length&&<div className="empty">No matches for “{search}”.<button className="secondary" onClick={() => setSearch('')}>Show all buildings</button></div>}</div>
-            {!configured&&<div className="connect-hint">Viewing sample data. Connect your Firebase project to load live buildings.</div>}
+            {!configured&&<div className="connect-hint">Viewing sample data. Set VITE_GNARLY_API_BASE to load live buildings.</div>}
             {loadError&&<div role="alert" className="error">{loadError}<button className="secondary" onClick={() => setRefresh(value => value+1)}>Retry loading buildings</button></div>}
           </aside>
           {selected&&<aside className="detail-card glass" aria-busy={loadingMap}>
@@ -106,7 +108,7 @@ function App() {
           <div className="map-caption glass"><LocateFixed size={14}/> Cornell area, Ithaca NY</div>
         </main>}
     </Suspense>
-    {authOpen&&<AuthDialog connected={user} onClose={() => setAuthOpen(false)} onBeforeLogout={canLeave}/>}
+    {authOpen&&<AuthDialog connected={user} email={email || currentEmail()} onClose={() => setAuthOpen(false)} onBeforeLogout={canLeave}/>}
   </div>;
 }
 createRoot(document.getElementById('root')!).render(<React.StrictMode><ErrorBoundary><App/></ErrorBoundary></React.StrictMode>);

@@ -4,18 +4,17 @@ import { FieldValue, getFirestore, type DocumentData, type DocumentSnapshot, typ
 import { getStorage } from 'firebase-admin/storage';
 import {
   ApiError,
-  defaultQuotas,
   type BuildingRecord,
   type CommitWrite,
   type FloorRecord,
+  type PointerUpdate,
   type PublishRecord,
-  type Quota,
-  type Quotas,
   type Role,
   type VersionRecord,
   type ZoneRecord,
 } from './model.ts';
-import type { CounterStore, MetadataStore, ObjectStore, RateKey } from './store.ts';
+import { quotasFromEnv } from './quotas.ts';
+import { canonical, parseRecordPath, type CounterStore, type MetadataStore, type ObjectStore, type RateKey } from './store.ts';
 import type { Deps } from './service.ts';
 
 const PROJECT_ID = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'gnarly-e65c1';
@@ -36,7 +35,11 @@ export function createFirebaseDeps(): Deps & { trustProxy?: boolean } {
     verifyToken: async token => {
       try {
         const decoded = await auth.verifyIdToken(token);
-        return { uid: decoded.uid };
+        return {
+          uid: decoded.uid,
+          email: typeof decoded.email === 'string' ? decoded.email : undefined,
+          emailVerified: decoded.email_verified === true,
+        };
       } catch {
         throw new ApiError(401, 'unauthenticated', 'Sign in again.');
       }
@@ -200,6 +203,11 @@ class FirestoreMetadata implements MetadataStore {
           structurePath: zone.structurePath,
           surfaceColorsPath: zone.surfaceColorsPath,
           surfaceColorAtlasPath: zone.surfaceColorAtlasPath,
+          transformsPath: zone.transformsPath,
+          gaussianSplatPath: zone.gaussianSplatPath,
+          gaussianSplatDataPath: zone.gaussianSplatDataPath,
+          texturedMeshPath: zone.texturedMeshPath,
+          texturedMeshMetadataPath: zone.texturedMeshMetadataPath,
           relocalizationHint: zone.relocalizationHint ?? '',
           startNodeId: zone.startNodeId ?? '',
         }));
@@ -218,6 +226,41 @@ class FirestoreMetadata implements MetadataStore {
       });
       tx.update(publishRef, { status: 'committed', committedAt: new Date().toISOString() });
       return 'committed' as const;
+    });
+  }
+
+  async updatePointer(update: PointerUpdate) {
+    const ref = update.zoneId
+      ? this.building(update.buildingId).collection('versions').doc(update.versionId).collection('zones').doc(update.zoneId)
+      : this.building(update.buildingId).collection('versions').doc(update.versionId);
+    return this.db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return 'missing' as const;
+      const path = snap.get(update.pathField) ? String(snap.get(update.pathField)) : '';
+      const marker = snap.get(update.markerField) ? String(snap.get(update.markerField)) : '';
+      if (path !== update.expectedPath || marker !== update.expectedMarker) return 'conflict' as const;
+      tx.update(ref, { [update.pathField]: update.path, [update.markerField]: update.marker });
+      return 'updated' as const;
+    });
+  }
+
+  async patchRecord(path: string, before: Record<string, unknown>, after: Record<string, unknown>) {
+    const ref = recordRef(this.db, path);
+    if (!ref) return 'missing' as const;
+    return this.db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return 'missing' as const;
+      const current = plain(snap.data() || {}) as Record<string, unknown>;
+      if (canonical(current) !== canonical(before)) return 'conflict' as const;
+      const patch: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(after)) {
+        if (canonical(value) !== canonical(current[key])) patch[key] = value;
+      }
+      for (const key of Object.keys(current)) {
+        if (!(key in after)) patch[key] = FieldValue.delete();
+      }
+      if (Object.keys(patch).length) tx.update(ref, patch as DocumentData);
+      return 'saved' as const;
     });
   }
 }
@@ -276,7 +319,13 @@ function mapVersion(id: string, data: DocumentData): VersionRecord {
     status: String(data.status || 'draft'),
     buildingLayoutPath: data.buildingLayoutPath ? String(data.buildingLayoutPath) : null,
     zoneConnectionsPath: data.zoneConnectionsPath ? String(data.zoneConnectionsPath) : null,
+    buildingJsonPath: data.buildingJsonPath ? String(data.buildingJsonPath) : null,
+    scanFeaturesPath: data.scanFeaturesPath ? String(data.scanFeaturesPath) : null,
+    structurePath: data.structurePath ? String(data.structurePath) : null,
     publishId: data.publishId ? String(data.publishId) : undefined,
+    ...(data.webGraphRevision ? { webGraphRevision: String(data.webGraphRevision) } : {}),
+    ...(data.webBuildingLayoutRevision ? { webBuildingLayoutRevision: String(data.webBuildingLayoutRevision) } : {}),
+    ...(data.webZoneConnectionsRevision ? { webZoneConnectionsRevision: String(data.webZoneConnectionsRevision) } : {}),
   };
 }
 
@@ -293,8 +342,14 @@ function mapZone(id: string, data: DocumentData): ZoneRecord {
     structurePath: text('structurePath'),
     surfaceColorsPath: text('surfaceColorsPath'),
     surfaceColorAtlasPath: text('surfaceColorAtlasPath'),
+    transformsPath: text('transformsPath'),
+    gaussianSplatPath: text('gaussianSplatPath'),
+    gaussianSplatDataPath: text('gaussianSplatDataPath'),
+    texturedMeshPath: text('texturedMeshPath'),
+    texturedMeshMetadataPath: text('texturedMeshMetadataPath'),
     relocalizationHint: text('relocalizationHint'),
     startNodeId: text('startNodeId'),
+    webGraphRevision: text('webGraphRevision'),
   };
 }
 
@@ -318,17 +373,29 @@ function isNotFound(error: unknown) {
   return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: number }).code === 404;
 }
 
-function quotasFromEnv(): Quotas {
-  const override = (action: keyof Quotas, field: keyof Quota, fallback: number) => {
-    const raw = process.env[`GNARLY_RATE_${action.toUpperCase()}_${field === 'windowMs' ? 'WINDOW_MS' : field.toUpperCase()}`];
-    const parsed = raw ? Number(raw) : fallback;
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-  };
-  const quota = (action: keyof Quotas): Quota => ({
-    windowMs: override(action, 'windowMs', defaultQuotas[action].windowMs),
-    user: override(action, 'user', defaultQuotas[action].user),
-    building: override(action, 'building', defaultQuotas[action].building),
-    ip: override(action, 'ip', defaultQuotas[action].ip),
-  });
-  return { publish: quota('publish'), list: quota('list'), download: quota('download') };
+function recordRef(db: Firestore, path: string) {
+  const parsed = parseRecordPath(path);
+  if (!parsed) return null;
+  const building = db.collection('buildings').doc(parsed.buildingId);
+  if (parsed.kind === 'building') return building;
+  if (parsed.kind === 'publish') return building.collection('publishes').doc(parsed.publishId);
+  const version = building.collection('versions').doc(parsed.versionId);
+  if (parsed.kind === 'version') return version;
+  if (parsed.kind === 'zone') return version.collection('zones').doc(parsed.zoneId);
+  return version.collection('floors').doc(parsed.floorId);
+}
+
+function plain(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(plain);
+  if (value && typeof value === 'object') {
+    if ('toDate' in value && typeof (value as { toDate?: unknown }).toDate === 'function') {
+      return (value as { toDate: () => Date }).toDate().toISOString();
+    }
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 2 && entries.every(([key]) => key === 'latitude' || key === 'longitude')) {
+      return Object.fromEntries(entries);
+    }
+    return Object.fromEntries(entries.map(([key, item]) => [key, plain(item)]));
+  }
+  return value;
 }

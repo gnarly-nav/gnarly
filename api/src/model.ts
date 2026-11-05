@@ -21,11 +21,14 @@ export type BuildingRecord = {
   status: string;
   activeVersion: string | null;
   ownerUid: string | null;
+  legacyOwnerUid?: string | null;
   acl: Record<string, Role>;
   visibility: Visibility;
   latitude?: number;
   longitude?: number;
   mapHeadingDegrees?: number;
+  /** Set when the row was imported without its storage objects. */
+  metadataOnly?: boolean;
 };
 
 export type ZoneRecord = {
@@ -46,6 +49,7 @@ export type ZoneRecord = {
   texturedMeshMetadataPath?: string;
   relocalizationHint?: string;
   startNodeId?: string;
+  webGraphRevision?: string;
 };
 
 export type FloorRecord = {
@@ -61,7 +65,13 @@ export type VersionRecord = {
   status: string;
   buildingLayoutPath?: string | null;
   zoneConnectionsPath?: string | null;
+  buildingJsonPath?: string | null;
+  scanFeaturesPath?: string | null;
+  structurePath?: string | null;
   publishId?: string;
+  webGraphRevision?: string;
+  webBuildingLayoutRevision?: string;
+  webZoneConnectionsRevision?: string;
 };
 
 export type ExpectedFile = {
@@ -100,6 +110,7 @@ export type PublishRecord = {
   files: ExpectedFile[];
   zones: PublishZone[];
   carry: CarryForward;
+  committedAt?: string;
 };
 
 export type CommitWrite = {
@@ -112,7 +123,29 @@ export type CommitWrite = {
   floors: FloorRecord[];
 };
 
-export type Caller = { uid: string; ip: string };
+export type Caller = {
+  uid: string;
+  ip: string;
+  email?: string;
+  emailVerified?: boolean;
+  /** Set when the request has no bearer token. Reads are allowed; writes are not. */
+  anonymous?: boolean;
+};
+
+export const DEFAULT_ADMIN_EMAIL = 'nj277@cornell.edu';
+
+export type PointerUpdate = {
+  buildingId: string;
+  versionId: string;
+  /** Empty when the pointer lives on the version document rather than a zone. */
+  zoneId: string;
+  pathField: 'buildingJsonPath' | 'buildingLayoutPath' | 'zoneConnectionsPath';
+  markerField: 'webGraphRevision' | 'webBuildingLayoutRevision' | 'webZoneConnectionsRevision';
+  path: string;
+  marker: string;
+  expectedPath: string;
+  expectedMarker: string;
+};
 
 export type Quota = { windowMs: number; user: number; building: number; ip: number };
 export type Quotas = Record<Action, Quota>;

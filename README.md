@@ -7,7 +7,7 @@ Gnarly turns a LiDAR iPhone scan into an indoor AR navigation experience. Map a 
 ## What’s working
 
 - **LiDAR mapper:** RoomPlan geometry, ARKit world maps, walked-path graphs, named waypoints, and optional manual anchors.
-- **Cloud map library:** publish scans to Firebase and choose/download a building from the Navigator—no Unity rebuild for each new map.
+- **Cloud map library:** publish scans and choose/download a building from the Navigator—no Unity rebuild for each new map. The web app and publish API can run on AWS (DynamoDB, S3, Cognito); see [docs/aws.md](docs/aws.md). Firebase remains available behind `GNARLY_BACKEND`.
 - **Multi-zone buildings:** arrange scans in the web editor, join same-floor zones, and connect floors with elevator waypoints.
 - **AR guidance:** a dense, floor-aligned route renders directly in the camera view; same-floor handoffs stay in session, while elevator rides re-localize on arrival.
 - **Live spatial feedback:** LiDAR watches the route corridor for obstacles, and iPhone haptics act as a tactile compass when the phone faces the right direction.
@@ -21,7 +21,8 @@ web/                    React web companion and route preview
 shared/                 Versioned package schema and example data
 docs/                   Setup, handoff, and integration notes
 firebase/               Firestore and Cloud Storage security rules
-api/                    Publish and download API (Cloud Run or Cloud Functions)
+api/                    Publish and download API (AWS Lambda, or Cloud Run / Cloud Functions)
+infra/                  CDK stack for the Lambda Function URL (does not create the table or bucket)
 ```
 
 ## Getting started

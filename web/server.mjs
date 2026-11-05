@@ -4,16 +4,17 @@ import {resolve,extname,sep} from 'node:path';
 import {readSignedTarget} from './signedProxy.mjs';
 
 const port=Number(process.env.PORT||5173);
-const bucket=process.env.FIREBASE_STORAGE_BUCKET||'gnarly-e65c1.firebasestorage.app';
+const buckets=[process.env.GNARLY_BUCKET||'gnarly-data-402275401617-us-east-1',process.env.FIREBASE_STORAGE_BUCKET].filter(Boolean);
 const root=resolve('dist');
-const prefix='/__firebase_storage/v0/b/'+encodeURIComponent(bucket)+'/o/';
+const legacyBucket=process.env.FIREBASE_STORAGE_BUCKET||'';
+const prefix=legacyBucket?'/__firebase_storage/v0/b/'+encodeURIComponent(legacyBucket)+'/o/':'';
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.ico':'image/x-icon'};
 
 createServer(async(req,res)=>{
   const url=new URL(req.url||'/',`http://localhost:${port}`);
   if(req.method!=='GET'){res.writeHead(405).end();return}
   if(url.pathname==='/__signed'){
-    const target=readSignedTarget(url.searchParams.get('url'),bucket);
+    const target=readSignedTarget(url.searchParams.get('url'),buckets);
     if(!target){res.writeHead(400).end('Invalid signed URL');return}
     try{
       const upstream=await fetch(target);
@@ -22,7 +23,7 @@ createServer(async(req,res)=>{
     }catch{res.writeHead(502).end('Storage request failed')}
     return;
   }
-  if(url.pathname.startsWith('/__firebase_storage/')){
+  if(prefix&&url.pathname.startsWith('/__firebase_storage/')){
     if(!url.pathname.startsWith(prefix)||url.searchParams.get('alt')!=='media'){res.writeHead(400).end('Invalid Storage path');return}
     try{
       const upstream=await fetch('https://firebasestorage.googleapis.com'+url.pathname.replace(/^\/__firebase_storage/,'')+url.search);

@@ -1,8 +1,8 @@
 import type { Building, BuildingLayout, ZoneConnections } from './data.ts';
-import { saveBuildingLayout, saveZoneConnections } from './firebase.ts';
+import { saveBuildingLayout, saveZoneConnections } from './cloud.ts';
 import { emptyZoneConnections, normalizeZoneConnections } from './zoneConnections.ts';
 
-export type DataMode = 'local' | 'firebase';
+export type DataMode = 'local' | 'cloud';
 export type BuildingMeta = { connections: ZoneConnections; layout?: BuildingLayout };
 const localKey = (kind: 'zone-links' | 'layout', building: Building) => ['gnarly-local-' + kind, building.id, building.activeVersion || 'sample'].join(':');
 
@@ -26,14 +26,14 @@ export function loadBuildingMeta(building: Building, mode: DataMode): BuildingMe
 }
 
 export async function saveConnections(building: Building, mode: DataMode, document: ZoneConnections): Promise<ZoneConnections> {
-  if (mode === 'firebase') return saveZoneConnections(building, document);
+  if (mode === 'cloud') return saveZoneConnections(building, document);
   const normalized = normalizeZoneConnections(document);
   localStorage.setItem(localKey('zone-links', building), JSON.stringify(normalized));
   return normalized;
 }
 
 export async function saveLayout(building: Building, mode: DataMode, layout: BuildingLayout): Promise<BuildingLayout> {
-  if (mode === 'firebase') return saveBuildingLayout(building, layout);
+  if (mode === 'cloud') return saveBuildingLayout(building, layout);
   for (const zone of layout.zones) {
     if (!zone.zoneId || ![zone.floor, zone.x, zone.z, zone.rotationDegrees].every(Number.isFinite)) throw Error('Each zone needs a finite floor, X, Z, and rotation.');
   }

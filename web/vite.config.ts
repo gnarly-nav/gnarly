@@ -15,13 +15,15 @@ function proxySigned(req,res,bucket){
 
 export default defineConfig(({mode})=>{
   const env=loadEnv(mode,process.cwd(),'VITE_');
-  const bucket=env.VITE_FIREBASE_STORAGE_BUCKET;
-  const prefix=bucket?'/__firebase_storage/v0/b/'+encodeURIComponent(bucket)+'/o/':'';
+  const buckets=[env.VITE_GNARLY_BUCKET||'gnarly-data-402275401617-us-east-1',env.VITE_FIREBASE_STORAGE_BUCKET].filter(Boolean);
+  const legacy=env.VITE_FIREBASE_STORAGE_BUCKET;
+  const prefix=legacy?'/__firebase_storage/v0/b/'+encodeURIComponent(legacy)+'/o/':'';
   return {
+    base:env.VITE_BASE||'/',
     plugins:[react(),{
       name:'gnarly-signed-proxy',
-      configureServer(server){server.middlewares.use('/__signed',(req,res)=>proxySigned(req,res,bucket));},
-      configurePreviewServer(server){server.middlewares.use('/__signed',(req,res)=>proxySigned(req,res,bucket));},
+      configureServer(server){server.middlewares.use('/__signed',(req,res)=>proxySigned(req,res,buckets));},
+      configurePreviewServer(server){server.middlewares.use('/__signed',(req,res)=>proxySigned(req,res,buckets));},
     }],
     server:{proxy:prefix?{[prefix]:{target:'https://firebasestorage.googleapis.com',changeOrigin:true,rewrite:path=>path.replace(/^\/__firebase_storage/,'')}}:{}},
   };

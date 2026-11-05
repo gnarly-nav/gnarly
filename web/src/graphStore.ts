@@ -1,7 +1,7 @@
 import type { Building, Graph } from './data.ts';
-import { createFirebaseGraphStore } from './firebase.ts';
+import { createCloudGraphStore } from './cloud.ts';
 
-export type GraphSnapshot = { graph: Graph; revision: string; source: 'local' | 'firebase'; path?: string; remoteMarker?: string };
+export type GraphSnapshot = { graph: Graph; revision: string; source: 'local' | 'cloud'; path?: string; remoteMarker?: string };
 export type GraphStore = {
   load(): Promise<GraphSnapshot>;
   save(graph: Graph, expected: GraphSnapshot): Promise<GraphSnapshot>;
@@ -44,6 +44,23 @@ export function createLocalGraphStore(building: Building): GraphStore {
     },
   };
 }
-export function createGraphStore(building: Building, mode: 'local' | 'firebase'): GraphStore {
-  return mode === 'local' ? createLocalGraphStore(building) : createFirebaseGraphStore(building);
+/** The graph already loaded with the building. Viewers do not refetch it. */
+export function createLoadedGraphStore(building: Building): GraphStore {
+  if (!building.graph) throw Error('Graph is unavailable.');
+  const graph = copyGraph(building.graph);
+  const snapshot: GraphSnapshot = {
+    graph,
+    revision: `${building.graphPath || 'loaded'}:${graphDigest(graph)}`,
+    path: building.graphPath,
+    remoteMarker: building.graphRevision || '',
+    source: 'local',
+  };
+  return {
+    async load() { return structuredClone(snapshot); },
+    async save() { throw Error('This account cannot edit the map.'); },
+    subscribe() { return () => {}; },
+  };
+}
+export function createGraphStore(building: Building, mode: 'local' | 'cloud'): GraphStore {
+  return mode === 'local' ? createLocalGraphStore(building) : createCloudGraphStore(building);
 }

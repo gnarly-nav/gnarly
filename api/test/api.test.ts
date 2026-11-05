@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+process.env.ADMIN_EMAILS = 'nj277@cornell.edu';
+
 import { createHandler } from '../src/http.ts';
 import { ApiError, type Quotas } from '../src/model.ts';
 import type { Deps } from '../src/service.ts';
@@ -51,7 +53,10 @@ function world(options: { quotas?: Quotas; adminUid?: string } = {}) {
     adminUid: options.adminUid ?? 'admin',
     verifyToken: async token => {
       if (!token.startsWith('user:')) throw new ApiError(401, 'unauthenticated', 'Sign in again.');
-      return { uid: token.slice('user:'.length) };
+      const [uid, email, flag] = token.slice('user:'.length).split('|');
+      if (email) return { uid, email, emailVerified: flag === '1' };
+      if (uid === 'owner' || uid === 'admin') return { uid, email: 'nj277@cornell.edu', emailVerified: true };
+      return { uid, email: `${uid}@example.com`, emailVerified: true };
     },
     objects,
     metadata,
@@ -70,7 +75,13 @@ test('health and auth', async () => {
   try {
     const health = await fetch(base + '/healthz');
     assert.equal(health.status, 200);
-    const denied = await fetch(base + '/v1/buildings');
+    const open = await fetch(base + '/v1/buildings');
+    assert.equal(open.status, 200);
+    const denied = await fetch(base + '/v1/buildings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'hall', name: 'Hall' }),
+    });
     assert.equal(denied.status, 401);
     const origin = await fetch(base + '/v1/buildings', { headers: { origin: 'https://evil.example' } });
     assert.equal(origin.status, 403);
@@ -185,7 +196,7 @@ test('a publish that loses the pointer race does not overwrite the newer map', a
   }
 });
 
-test('members-only buildings stay closed to other accounts', async () => {
+test('published maps are readable by everyone and only the admin email can write', async () => {
   const { server, metadata, objects } = world();
   const base = await listen(server);
   try {
@@ -196,16 +207,20 @@ test('members-only buildings stay closed to other accounts', async () => {
     metadata.versions.set('private/v1', { id: 'v1', versionNumber: 1, status: 'published' });
     objects.put('buildings/private/v1/zone-connections.json', connections, 'application/json');
     const outsider = await call(base, 'GET', '/v1/buildings/private/package', undefined, 'stranger');
-    assert.equal(outsider.status, 403);
+    assert.equal(outsider.status, 200);
+    const anonymous = await fetch(base + '/v1/buildings/private/package');
+    assert.equal(anonymous.status, 200);
     const viewer = await call(base, 'POST', '/v1/downloads', { path: 'buildings/private/v1/zone-connections.json' }, 'viewer');
     assert.equal(viewer.status, 200);
     const editorDenied = await call(base, 'POST', '/v1/buildings/private/publishes', { files: [file('zone-connections.json', connections.length)] }, 'viewer');
     assert.equal(editorDenied.status, 403);
     const editor = await call(base, 'POST', '/v1/buildings/private/publishes', { files: [file('zone-connections.json', connections.length)] }, 'editor');
-    assert.equal(editor.status, 200);
+    assert.equal(editor.status, 403);
+    const admin = await call(base, 'POST', '/v1/buildings/private/publishes', { files: [file('zone-connections.json', connections.length)] }, 'owner');
+    assert.equal(admin.status, 200);
     const listed = await call(base, 'GET', '/v1/buildings', undefined, 'stranger');
     const library = await listed.json() as { buildings: { id: string }[] };
-    assert.equal(library.buildings.some(item => item.id === 'private'), false);
+    assert.equal(library.buildings.some(item => item.id === 'private'), true);
   } finally {
     server.close();
   }
