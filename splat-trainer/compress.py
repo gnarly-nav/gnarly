@@ -19,15 +19,32 @@ logger = logging.getLogger(__name__)
 def compress_to_spz(input_ply: Path, output_spz: Path, quality: str = "high") -> None:
     """Compress a PLY Gaussian splat to SPZ format."""
     try:
-        # Placeholder for SPZ compression
-        # In production, use: https://github.com/nianticlabs/spz
         logger.info(f"Compressing {input_ply} to {output_spz} (quality: {quality})")
-        logger.warning("NOTE: This is a placeholder. In production, use Niantic SPZ library.")
         
-        # Mock compression
-        output_spz.write_text("compressed SPZ data placeholder")
-        
-        logger.info(f"Compression complete: {output_spz}")
+        try:
+            # Try to use spz library if available
+            import spz
+            
+            # Load PLY
+            from plyfile import PlyData
+            ply_data = PlyData.read(str(input_ply))
+            
+            # Compress with SPZ
+            quality_level = {"low": 0.5, "medium": 0.75, "high": 0.9}.get(quality, 0.9)
+            compressed = spz.compress(ply_data, quality=quality_level)
+            
+            # Write SPZ file
+            with open(output_spz, 'wb') as f:
+                f.write(compressed)
+            
+            logger.info(f"Compression complete: {output_spz} (quality: {quality})")
+            
+        except ImportError:
+            logger.warning("SPZ library not available. Copying PLY as placeholder.")
+            # Fallback: just copy the PLY with a .spz extension
+            import shutil
+            shutil.copy(input_ply, output_spz)
+            logger.info(f"Copied PLY to {output_spz} (SPZ library unavailable)")
         
     except Exception as e:
         logger.error(f"Compression failed: {e}", exc_info=True)
