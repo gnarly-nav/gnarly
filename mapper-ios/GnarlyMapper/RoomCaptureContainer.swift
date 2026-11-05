@@ -14,6 +14,12 @@ struct RoomCaptureContainer: UIViewRepresentable {
         let configuration = ARWorldTrackingConfiguration()
         configuration.planeDetection = [.horizontal, .vertical]
         configuration.environmentTexturing = .automatic
+        
+        // Explicitly enable LiDAR depth for better surface color occlusion checking
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            configuration.frameSemantics = .sceneDepth
+        }
+        
         mapper.arSession.run(configuration)
 
         let view = RoomCaptureView(frame: .zero, arSession: mapper.arSession)
