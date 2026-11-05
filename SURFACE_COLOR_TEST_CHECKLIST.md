@@ -109,6 +109,11 @@ Load the scan in the web viewer and check visual improvements.
   - Floor patterns line up correctly
   - No offset between adjacent faces
 
+- [ ] **Consistent lighting** ✨ NEW (PR #2)
+  - No blotchy dark/bright patches across surfaces
+  - Even illumination throughout the scan
+  - Colors look balanced and natural
+
 ### Specific Issues Fixed
 
 - [ ] **Clutter handling**: Shelves, pictures, cables less smeared
@@ -120,10 +125,10 @@ Load the scan in the web viewer and check visual improvements.
   - Should maintain quality across entire surface
   - No pixelation or blur in center
 
-- [ ] **Seams**: Acceptable transitions between faces
-  - Not perfect (seam leveling not in this PR)
-  - But no worse than before
-  - No obvious color steps or gaps
+- [ ] **Seams**: Smooth transitions between faces ✨ IMPROVED (PR #2)
+  - Should be noticeably better than before
+  - Less visible color discontinuities
+  - Gentle transitions, not harsh boundaries
 
 ### Color Accuracy
 - [ ] **Colors look correct**: Not too dark, bright, or saturated

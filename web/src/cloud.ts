@@ -18,7 +18,7 @@ import {
   refreshTokenBody,
   tokenEndpoint,
 } from './cognitoOAuth.ts';
-import type { Building, BuildingLayout, Graph, Node, ScanFeatures, SurfaceColorFace, SurfaceColors, ZoneConnections, ZoneView } from './data';
+import type { Building, BuildingLayout, GaussianSplat, Graph, Node, ScanFeatures, SurfaceColorFace, SurfaceColors, ZoneConnections, ZoneView } from './data';
 import { graphDigest } from './graphStore.ts';
 import { emptyZoneConnections, normalizeZoneConnections } from './zoneConnections.ts';
 
@@ -404,6 +404,25 @@ export function normalizeGraph(raw: unknown): Graph {
   };
 }
 
+async function loadGaussianSplat(jsonUrl: string | undefined, dataUrl: string | undefined): Promise<GaussianSplat | undefined> {
+  if (!jsonUrl) return undefined;
+  try {
+    const raw = await fetchUrlJSON(jsonUrl) as {
+      format?: string;
+      splatCount?: number;
+      bounds?: GaussianSplat['bounds'];
+    };
+    if (!raw.format || !['spz', 'ply', 'splat'].includes(raw.format)) return undefined;
+    let splatUrl: string | undefined;
+    if (dataUrl) {
+      try { splatUrl = URL.createObjectURL(await (await fetchUrl(dataUrl)).blob()); } catch { splatUrl = undefined; }
+    }
+    return { splatUrl, format: raw.format as GaussianSplat['format'], splatCount: raw.splatCount, bounds: raw.bounds };
+  } catch {
+    return undefined;
+  }
+}
+
 async function loadTexturedMesh(meshUrl: string | undefined): Promise<string | undefined> {
   if (!meshUrl) return undefined;
   try {
@@ -473,8 +492,14 @@ export async function loadBuilding(input: Building): Promise<Building> {
       const colors = scanResult.scan && colorsFile ? await loadSurfaceColors(colorsFile.url, atlasFile?.url) : undefined;
       const meshFile = fileNamed(item.files, 'textured-mesh.glb');
       const texturedMeshUrl = scanResult.scan ? await loadTexturedMesh(meshFile?.url) : undefined;
+      const splatJson = fileNamed(item.files, 'gaussian-splat.json');
+      const splatData = fileNamed(item.files, 'gaussian-splat.spz')
+        || fileNamed(item.files, 'gaussian-splat.ply')
+        || fileNamed(item.files, 'gaussian-splat.splat');
+      const splat = scanResult.scan ? await loadGaussianSplat(splatJson?.url, splatData?.url) : undefined;
       let scan = scanResult.scan;
       if (scan && colors) scan = { ...scan, colors };
+      if (scan && splat) scan = { ...scan, splat };
       if (scan && texturedMeshUrl) scan = { ...scan, texturedMesh: { meshUrl: texturedMeshUrl } };
       const raw = fileNamed(item.files, 'scan.json');
       const rawScanStatus = scan ? '' : raw ? ' Raw scan.json exists.' : ' Raw scan.json is also missing.';

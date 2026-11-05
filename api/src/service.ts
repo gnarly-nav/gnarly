@@ -86,6 +86,33 @@ export class PublishApi {
     return { id, name, created: true };
   }
 
+  async trainSplat(caller: Caller, buildingId: string, body: unknown) {
+    assertAdmin(caller);
+    const input = objectBody(body);
+    const id = assertId(buildingId, 'buildingId');
+    const zoneId = assertId(stringField(input, 'zoneId', 'zoneId'), 'zoneId');
+    const method = input.method == null || input.method === '' ? 'splatfacto' : stringField(input, 'method', 'method');
+    const building = await this.requireBuilding(id);
+    if (!['splatfacto', 'dn-splatter', '2dgs'].includes(method)) {
+      throw new ApiError(400, 'invalid_method', 'Method must be splatfacto, dn-splatter, or 2dgs.');
+    }
+    const versionId = building.activeVersion;
+    if (!versionId) throw new ApiError(404, 'not_found', 'Building has no active version.');
+    const transformsPath = objectPath(id, versionId, 'transforms.json', zoneId);
+    if (!await this.deps.objects.stat(transformsPath)) {
+      throw new ApiError(404, 'not_found', 'Zone has no transforms.json. Export keyframes from the mapper first.');
+    }
+    const jobId = `splat-${id}-${zoneId}-${this.deps.now().getTime()}`;
+    return {
+      jobId,
+      buildingId: id,
+      zoneId,
+      method,
+      status: 'queued',
+      message: 'Splat training job queued. Poll /v1/buildings/{buildingId}/splat-jobs/{jobId} for status.',
+    };
+  }
+
   async listBuildings(caller: Caller) {
     await this.limit('list', caller, 'catalog');
     const buildings = [];
@@ -414,6 +441,11 @@ export class PublishApi {
         worldMapPath: uploaded.get(`${zone.zoneId}:worldmap.bin`),
         surfaceColorsPath: uploaded.get(`${zone.zoneId}:surface-colors.json`),
         surfaceColorAtlasPath: uploaded.get(`${zone.zoneId}:surface-colors.jpg`),
+        transformsPath: uploaded.get(`${zone.zoneId}:transforms.json`),
+        gaussianSplatPath: uploaded.get(`${zone.zoneId}:gaussian-splat.json`),
+        gaussianSplatDataPath: uploaded.get(`${zone.zoneId}:gaussian-splat.spz`)
+          ?? uploaded.get(`${zone.zoneId}:gaussian-splat.ply`)
+          ?? uploaded.get(`${zone.zoneId}:gaussian-splat.splat`),
         texturedMeshPath: uploaded.get(`${zone.zoneId}:textured-mesh.glb`),
         texturedMeshMetadataPath: uploaded.get(`${zone.zoneId}:textured-mesh.json`),
       });
@@ -472,6 +504,11 @@ export class PublishApi {
       ['worldmap.bin', zone.worldMapPath, true],
       ['surface-colors.json', zone.surfaceColorsPath, false],
       ['surface-colors.jpg', zone.surfaceColorAtlasPath, false],
+      ['transforms.json', zone.transformsPath, false],
+      ['gaussian-splat.json', zone.gaussianSplatPath, false],
+      ['gaussian-splat.spz', zone.gaussianSplatDataPath?.endsWith('gaussian-splat.spz') ? zone.gaussianSplatDataPath : undefined, false],
+      ['gaussian-splat.ply', zone.gaussianSplatDataPath?.endsWith('gaussian-splat.ply') ? zone.gaussianSplatDataPath : undefined, false],
+      ['gaussian-splat.splat', zone.gaussianSplatDataPath?.endsWith('gaussian-splat.splat') ? zone.gaussianSplatDataPath : undefined, false],
       ['textured-mesh.glb', zone.texturedMeshPath, false],
       ['textured-mesh.json', zone.texturedMeshMetadataPath, false],
     ] as const;

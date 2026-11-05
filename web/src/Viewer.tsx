@@ -9,6 +9,7 @@ import { FLOOR_GAP, toLocal, toWorld, type Vec3, type ZoneTransform } from './zo
 import { InlineRename } from './ui.tsx';
 import { stairBoxes, type StairStep } from './stairMesh.ts';
 import { dominantAngle, normalizeDegrees, placeSegments, rotateAbout, snapRotation, snapTranslation, zoneCenter, zoneSegments, type P2, type Placement, type Segment } from './zoneArrange.ts';
+import { GaussianSplatRenderer } from './GaussianSplatRenderer';
 
 /** position is in the zone's own ARKit coordinates. */
 export type WalkLocation = { position: [number, number, number]; floorId: string; zoneId: string };
@@ -359,20 +360,26 @@ function ScannedGeometry({ scan, graph, floor, zoneId, onFloorPick }: { scan: Sc
   const atlas = useAtlasTexture(scan.colors);
   const real = Boolean(scan.colors);
   const surfaceColors = useMemo(() => ({ colors: scan.colors, atlas }), [scan.colors, atlas]);
-  return <SurfaceColorContext.Provider value={surfaceColors}>
-    {scan.texturedMesh && <TexturedMeshLayer meshUrl={scan.texturedMesh.meshUrl} />}
-    {scan.floors.filter(visible).map(item => {
-      const floorId = graph.floors.find(candidate => candidate.story === item.story)?.id || graph.floors[0]?.id;
-      return floorId ? <ScannedFloor key={item.identifier} feature={item} floorId={floorId} zoneId={zoneId} onPick={onFloorPick ? world => onFloorPick(world, floorId) : undefined} /> : null;
-    })}
-    {scan.walls.filter(visible).map(item => <Wall key={item.identifier} wall={item} portals={portals.filter(portal => portal.parentIdentifier === item.identifier)} />)}
-    {scan.windows.filter(visible).map(item => <FeatureBox key={item.identifier} feature={item} color={SCENE.window} opacity={real ? .6 : .32} />)}
-    {scan.doors.filter(visible).filter(item => item.category === 'door-closed').map(item =>
-      <FeatureBox key={item.identifier} feature={item} color={SCENE.door} opacity={real ? .96 : .35} />)}
-    {scan.objects.filter(visible).map(item => item.category === 'stairs'
-      ? <StairFlight key={item.identifier} feature={item} opacity={real ? .96 : .8} />
-      : <FeatureBox key={item.identifier} feature={item} color={SCENE.object} opacity={real ? .96 : .8} />)}
-  </SurfaceColorContext.Provider>;
+  const hasSplat = Boolean(scan.splat?.splatUrl);
+  return <>
+    {hasSplat && scan.splat && <GaussianSplatRenderer splat={scan.splat} visible />}
+    {scan.texturedMesh?.meshUrl && <TexturedMeshLayer meshUrl={scan.texturedMesh.meshUrl} />}
+    <SurfaceColorContext.Provider value={surfaceColors}>
+      {scan.floors.filter(visible).map(item => {
+        const floorId = graph.floors.find(candidate => candidate.story === item.story)?.id || graph.floors[0]?.id;
+        return floorId ? <ScannedFloor key={item.identifier} feature={item} floorId={floorId} zoneId={zoneId} onPick={onFloorPick ? world => onFloorPick(world, floorId) : undefined} /> : null;
+      })}
+      <group visible={!hasSplat}>
+        {scan.walls.filter(visible).map(item => <Wall key={item.identifier} wall={item} portals={portals.filter(portal => portal.parentIdentifier === item.identifier)} />)}
+        {scan.windows.filter(visible).map(item => <FeatureBox key={item.identifier} feature={item} color={SCENE.window} opacity={real ? .6 : .32} />)}
+        {scan.doors.filter(visible).filter(item => item.category === 'door-closed').map(item =>
+          <FeatureBox key={item.identifier} feature={item} color={SCENE.door} opacity={real ? .96 : .35} />)}
+        {scan.objects.filter(visible).map(item => item.category === 'stairs'
+          ? <StairFlight key={item.identifier} feature={item} opacity={real ? .96 : .8} />
+          : <FeatureBox key={item.identifier} feature={item} color={SCENE.object} opacity={real ? .96 : .8} />)}
+      </group>
+    </SurfaceColorContext.Provider>
+  </>;
 }
 
 function GraphFloor({ graph, floor, illustrative, zoneId, onFloorPick }: { graph: Graph; floor: string; illustrative?: boolean; zoneId?:string; onFloorPick?: WorldPick }) {

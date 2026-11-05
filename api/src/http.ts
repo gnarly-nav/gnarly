@@ -105,6 +105,9 @@ export async function handleApi(deps: Deps & { trustProxy?: boolean; corsOrigins
     if (request.method === 'POST' && publish) {
       return json(200, await api.commitPublish(caller, buildingId, decodeURIComponent(publish[1])), cors);
     }
+    if (request.method === 'POST' && rest === 'train-splat') {
+      return json(200, await api.trainSplat(caller, buildingId, await readJson(request)), cors);
+    }
     throw new ApiError(404, 'not_found', 'Unknown publish API route.');
   } catch (error) {
     if (error instanceof ApiError) {

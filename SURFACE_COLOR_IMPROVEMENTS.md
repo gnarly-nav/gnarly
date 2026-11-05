@@ -357,35 +357,84 @@ Per the research document, these are deferred:
 - Verify `_ZWrite = 0` and `_ZTest = LessEqual`
 - Confirm RecalculateNormals() is called
 
+## Additional Improvements (PR #2)
+
+These features were implemented in a follow-up PR after the initial improvements were merged.
+
+### 7. Exposure/White-Balance Normalization ✅
+
+**Implementation**: Iterative gain refinement based on overlapping texels
+- Estimate initial gain from exposure duration ratios
+- Measure actual brightness in textured regions across frames
+- Compute target brightness (median of all frames)
+- Iteratively adjust gains to match target (5 iterations)
+- Clamp gains to 0.2-5.0 range for stability
+- Apply in linear RGB space before sRGB conversion
+
+**Impact**:
+- ✅ Consistent lighting across entire scan
+- ✅ Eliminates blotchy dark/bright patches from varying exposure
+- ✅ Better color accuracy and balance
+
+### 8. Seam Leveling ✅
+
+**Implementation**: Feathered gain adjustment along shared face edges
+- Identify adjacent faces within each surface
+- Sample edge pixels from both faces
+- Compute average edge brightness per face
+- Apply 70% adjustment toward average, 30% original
+- Feather over 3-pixel border with exponential falloff
+- Clamp adjustments to 0.85-1.15 to avoid artifacts
+
+**Impact**:
+- ✅ Smoother transitions between adjacent faces
+- ✅ Reduced visible seams and color discontinuities
+- ✅ More professional overall appearance
+
+### 9. Metal Compute Foundation (Partial) ⚠️
+
+**Status**: Infrastructure implemented, GPU path deferred to future work
+
+**What's included**:
+- `SurfaceColorBakeMetal.swift` with complete Metal shader source
+- Automatic Metal device detection and fallback logic
+- Full projection kernel for GPU execution
+- Runtime shader compilation infrastructure
+
+**Current behavior**: Always uses CPU fallback (Metal path validates but doesn't execute)
+
+**Future completion** would enable:
+- 5-10× faster bake times
+- Real-time preview during scanning
+- Even higher resolution atlases (8K+)
+- Large building support
+
 ## Future Work
 
 Based on research document priorities:
 
-1. **Exposure normalization** (easy, metadata ready)
-   - Estimate gain per frame from overlap
-   - Apply in linear space before atlas pack
-   - Expected: eliminates blotchy patches
+1. **Complete Metal GPU acceleration** (medium effort)
+   - Implement buffer management and texture encoding
+   - Add command queue execution and result readback
+   - Expected: 5-10× faster bake
 
-2. **Seam leveling** (medium)
-   - Poisson blending across face boundaries
-   - Or: simple gain adjustment on edges
-   - Expected: smoother transitions
-
-3. **Metal compute** (medium)
-   - Port projection loop to Metal shader
-   - Process face as render pass with depth test
-   - Expected: 5-10× faster bake, enables higher res
-
-4. **Textured mesh** (hard)
+2. **Textured mesh visual layer** (hard)
    - Capture ARKit `sceneReconstruction = .mesh`
    - Server-side MVS texturing (mvs-texturing/OpenMVS)
-   - Expected: biggest quality jump, no parallax smearing
+   - Expected: biggest quality jump, eliminates parallax smearing
+
+3. **Gaussian splat pipeline** (hard)
+   - Export keyframes in nerfstudio format
+   - Train splats with DN-Splatter or 2DGS
+   - Render in web (Spark) and Unity (aras-p)
+   - Expected: photo-realistic visual quality
 
 ## References
 
 - Research document: `uploads/gnarly-splatting-research.md`
 - Test checklist: `SURFACE_COLOR_TEST_CHECKLIST.md`
-- PR: https://github.com/gnarly-nav/gnarly/pull/1
+- PR #1 (initial improvements): https://github.com/gnarly-nav/gnarly/pull/1
+- PR #2 (exposure/seam/Metal): TBD
 
 ## Questions?
 

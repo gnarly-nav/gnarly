@@ -22,6 +22,21 @@ const layout = Buffer.from(JSON.stringify({
   schemaVersion: 1,
   zones: [{ zoneId: 'zone-a', floor: 0, x: 1, z: 2, rotationDegrees: 0 }],
 }));
+const transformsJson = Buffer.from(JSON.stringify({
+  schemaVersion: 1,
+  zoneId: 'zone-a',
+  coordinateSystem: 'arkit-world-meters',
+  camera_model: 'OPENCV',
+  frames: [],
+}));
+const gaussianSplatJson = Buffer.from(JSON.stringify({
+  schemaVersion: 1,
+  zoneId: 'zone-a',
+  coordinateSystem: 'arkit-world-meters',
+  format: 'spz',
+  splatFile: 'gaussian-splat.spz',
+}));
+const gaussianSplatData = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]);
 
 const quotas: Quotas = {
   publish: { windowMs: 60_000, user: 20, building: 20, ip: 20 },
@@ -287,6 +302,9 @@ function putSession(objects: MemoryObjectStore, session: Session, overrides: Rec
     'worldmap.bin': worldMap,
     'zone-connections.json': connections,
     'building-layout.json': layout,
+    'transforms.json': transformsJson,
+    'gaussian-splat.json': gaussianSplatJson,
+    'gaussian-splat.spz': gaussianSplatData,
     ...overrides,
   };
   for (const upload of session.uploads) {
