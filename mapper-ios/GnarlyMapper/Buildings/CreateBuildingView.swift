@@ -3,7 +3,7 @@ import SwiftUI
 
 struct CreateBuildingView: View {
     @ObservedObject var library: BuildingLibrary
-    @EnvironmentObject private var auth: FirebaseAuthSession
+    @EnvironmentObject private var auth: CognitoSession
     @Environment(\.dismiss) private var dismiss
     @StateObject private var location = DeviceLocation()
     @State private var name = ""

@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct BuildingHomeView: View {
-    @EnvironmentObject private var auth: FirebaseAuthSession
+    @EnvironmentObject private var auth: CognitoSession
     @ObservedObject var library: BuildingLibrary
     @State private var creating = false
 
@@ -32,8 +32,16 @@ struct BuildingHomeView: View {
         .navigationTitle("Buildings")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button("Sign out") { auth.signOut() }
-                    .foregroundStyle(MapperTheme.muted)
+                VStack(alignment: .leading, spacing: 0) {
+                    Button("Sign out") { auth.signOut() }
+                        .foregroundStyle(MapperTheme.muted)
+                    if let email = auth.email, !email.isEmpty {
+                        Text(email)
+                            .font(.caption2)
+                            .foregroundStyle(MapperTheme.muted)
+                            .lineLimit(1)
+                    }
+                }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {

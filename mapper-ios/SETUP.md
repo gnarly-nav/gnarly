@@ -4,8 +4,8 @@ This project is defined with [XcodeGen](https://github.com/yonaskolb/XcodeGen) s
 
 ## Prerequisites
 
-- Xcode 26.2 or later (required by Firebase Apple SDK 12.19.2)
-- A LiDAR-capable iPhone running iOS 17+
+- Xcode with the iOS 17.4 SDK (Cognito hosted sign-in uses an https authentication callback)
+- A LiDAR-capable iPhone running iOS 17.4+
 - XcodeGen (`brew install xcodegen`), or create an equivalent SwiftUI iOS app manually using the settings in `project.yml`
 
 ## Generate and run
@@ -18,7 +18,7 @@ open GnarlyMapper.xcodeproj
 
 In Xcode, choose your development team and a physical LiDAR iPhone. The simulator cannot run RoomPlan scanning.
 
-For Firebase setup, configuration, rules, and upload/download testing, see [FIREBASE_SETUP.md](FIREBASE_SETUP.md). You do not need to commit `GoogleService-Info.plist`.
+For the API origin, Cognito keys, and how publish works, see [FIREBASE_SETUP.md](FIREBASE_SETUP.md). The filename is historical. The mapper does not use a Firebase plist.
 
 ## Export behavior
 

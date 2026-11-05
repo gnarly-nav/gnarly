@@ -42,7 +42,7 @@ Tap **Stairs** after the floor scan. That starts a new world map for the stairwe
 - The anchor, route, and graph use the same `zoneId` as the world map.
 - Share the generated package directory; do not commit real capture artifacts.
 
-Uploading from the mapper publishes raw `scan.json`, normalized `scan-features.json`, `structure.usdz`, `building.json`, and the zone ARWorldMap. The navigator requires all five files for a complete interactive-map package. Re-upload scans whose active Firebase version predates this package format.
+Uploading from the mapper publishes raw `scan.json`, normalized `scan-features.json`, `structure.usdz`, `building.json`, and the zone ARWorldMap through the publish API. The navigator requires all five files for a complete interactive-map package. Re-upload scans whose active version predates this package format.
 
 ### Real-world colors
 
@@ -58,6 +58,6 @@ The mapper’s manual waypoint type picker includes **Elevator**. Record or add 
 
 If one floor needs multiple scans, add **Zone continuation** points at the beginning and end of each scan. In the web editor, link a zone end to the next zone's start with a `continuation` connection. This is a map handoff, not a RoomPlan door or opening, and both pieces stay on the same floor in the 3D view.
 
-Firebase stores the shared connection file at `buildings/{buildingId}/{versionId}/zone-connections.json` and each floor graph under `buildings/{buildingId}/{versionId}/zones/{floorZoneId}/building.json`.
+The published package stores the shared connection file at `buildings/{buildingId}/{versionId}/zone-connections.json` and each floor graph under `buildings/{buildingId}/{versionId}/zones/{floorZoneId}/building.json`.
 
 `building.json` nodes are primarily RoomPlan doors, openings, stairs, and sections. Visibility edges connect nodes whose floor-plane line of sight does not cross a wall except at a door or opening. Optional recorded taps add entrance and destination labels for A*.

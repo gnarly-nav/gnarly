@@ -3,7 +3,15 @@
 <plist version="1.0">
 <dict>
 	<key>GnarlyApiBaseURL</key>
-	<string>http://127.0.0.1:8080</string>
+	<string>https://m7sgp6qsjkimymyrwa6bilxqzq0acbhx.lambda-url.us-east-1.on.aws</string>
+	<key>CognitoUserPoolId</key>
+	<string>us-east-1_pQIUmVbPJ</string>
+	<key>CognitoClientId</key>
+	<string>1osnrt38iuqvf5laum1tnj1hdn</string>
+	<key>CognitoDomain</key>
+	<string>gnarly-naijei.auth.us-east-1.amazoncognito.com</string>
+	<key>CognitoRedirectURI</key>
+	<string>https://naijei.com/gnarly/</string>
 	<key>CFBundleDisplayName</key>
 	<string>Gnarly Mapper</string>
 	<key>CFBundleExecutable</key>

@@ -4,7 +4,8 @@ using System.Threading.Tasks;
 using UnityEngine;
 
 /// <summary>
-/// Map library launch flow. Online maps use a background Firebase session; downloaded maps work offline.
+/// Map library launch flow. Online maps come from the AWS publish API; downloaded maps work offline.
+/// The type name is unchanged so existing scenes keep their script reference.
 /// </summary>
 public sealed partial class FirebaseNavigationPackageLoader : MonoBehaviour
 {
@@ -14,10 +15,9 @@ public sealed partial class FirebaseNavigationPackageLoader : MonoBehaviour
     FirebaseNavigationPackageRepository repository;
     Action<DownloadedNavigationPackage, string, string> packageReady;
     Action<string> statusChanged;
-    FirebaseNavigatorConfig firebaseConfig;
     string buildingId = "";
     string zoneId = "zone-a";
-    string status = "Preparing Firebase…";
+    string status = "Finding available maps…";
     bool visible;
     bool busy;
     bool hasCachedPackage;
@@ -37,15 +37,14 @@ public sealed partial class FirebaseNavigationPackageLoader : MonoBehaviour
         zoneId = PlayerPrefs.GetString(ZonePreference,
             string.IsNullOrWhiteSpace(defaultZoneId) ? "zone-a" : defaultZoneId);
 
-        var configured = FirebaseNavigationPackageRepository.TryLoadConfig(out firebaseConfig, out var configError);
-        repository = new FirebaseNavigationPackageRepository(firebaseConfig);
+        repository = new FirebaseNavigationPackageRepository(AwsNavigatorConfig.Load());
         visible = true;
-        status = configured ? "Finding available maps…" : configError;
+        status = "Finding available maps…";
         RefreshCacheState();
         LoadCachedLibrary();
         BuildUi();
         ReportStatus(status);
-        if (configured) _ = LoadMapsAsync();
+        _ = LoadMapsAsync();
     }
 
     void LoadCachedLibrary()
@@ -80,7 +79,7 @@ public sealed partial class FirebaseNavigationPackageLoader : MonoBehaviour
         try
         {
             SetStatus("Finding available maps…");
-            if (!await repository.TryRestoreSessionAsync()) await repository.SignInAnonymouslyAsync();
+            await repository.TryRestoreSessionAsync();
             var published = await repository.ListAvailableScansAsync();
             publishedLibrary = published;
             onlineMapsAvailable = true;
@@ -124,7 +123,7 @@ public sealed partial class FirebaseNavigationPackageLoader : MonoBehaviour
         catch (Exception exception)
         {
             SetStatus(exception.Message);
-            Debug.LogError($"[Gnarly] Firebase scan download failed: {exception}");
+            Debug.LogError($"[Gnarly] Map download failed: {exception}");
         }
         finally { busy = false; RefreshUi(); }
     }
@@ -173,7 +172,7 @@ public sealed partial class FirebaseNavigationPackageLoader : MonoBehaviour
     {
         visible = false;
         DestroyUi();
-        var source = package.IsOfflineCache ? "offline cache" : "Firebase";
+        var source = package.IsOfflineCache ? "offline cache" : "AWS";
         ReportStatus($"Loaded {package.BuildingId}/{package.VersionId}/{package.ZoneId} from {source}.");
         packageReady?.Invoke(package, startKey, destinationKey);
     }

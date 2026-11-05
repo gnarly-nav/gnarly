@@ -106,18 +106,43 @@ npm start
 
 `https://gnarly-naijei.auth.us-east-1.amazoncognito.com/oauth2/authorize?identity_provider=Google&response_type=code`
 
-The request uses PKCE (`S256`) and `scope=openid email`. The browser exchanges the returned code at `/oauth2/token`, stores the ID, access, and refresh tokens, and refreshes them before they expire. API calls send the ID token. Sign-out clears those tokens and redirects to the hosted `/logout` URL. Email and password remain as a fallback and still do not create users.
+The request uses PKCE (`S256`) and `scope=openid email`. The browser exchanges the returned code at `/oauth2/token`, stores the ID, access, and refresh tokens, and refreshes them before they expire. API calls send the ID token. Sign-out clears those tokens and redirects to the hosted `/logout` URL. Email and password remain as a fallback. That form uses Cognito `USER_SRP_AUTH` (the same challenge as `amazon-cognito-identity-js`) and still does not create users.
 
 This repo does not change the user pool. Google sign-in works after the Google IdP is attached to the pool and the ID token includes `email` plus `email_verified: true` for `nj277@cornell.edu`. Anyone else can sign in and still cannot write.
 
 ## Other clients
 
-The mapper and Navigator still obtain Firebase ID tokens. Against this API:
+The mapper and the Navigator use this API and Cognito. They do not call DynamoDB or S3 themselves, and they do not send Firebase tokens.
 
-- downloads work with no token
-- publish and other writes need a Cognito ID token for `nj277@cornell.edu`
+Both reuse the existing public app client (`1osnrt38iuqvf5laum1tnj1hdn`). Its ID tokens already pass `COGNITO_CLIENT_ID`. A second app client is not required: Google sign-in is the hosted UI with PKCE, and the redirect URLs already registered on that client are enough. Email and password use `USER_SRP_AUTH` against `cognito-idp`, the same public client and the same challenge as the website. Neither client creates users.
 
-Those apps were not switched to Cognito.
+- iOS (mapper and Navigator) uses `https://naijei.com/gnarly/`. `ASWebAuthenticationSession` on iOS 17.4 intercepts that https callback, so no custom URL scheme and no extra Google iOS client ID are added.
+- The Unity Editor uses `http://localhost:5173/`. Quit anything else listening on that port (often `npm run dev`) before signing in from the Editor.
+- Navigator map list and download work with no token. When a Cognito session exists, the ID token is sent. Publish, placement, and layout edits from the mapper require the verified admin email.
+
+No Google client ID is stored in the apps. Google is an identity provider on the user pool, not a separate mobile OAuth client.
+
+Mapper keys in `mapper-ios/GnarlyMapper/Info.plist` (defaults match the live account when a value is empty):
+
+| Key | Value |
+| --- | --- |
+| `GnarlyApiBaseURL` | Lambda Function URL |
+| `CognitoUserPoolId` | `us-east-1_pQIUmVbPJ` |
+| `CognitoClientId` | `1osnrt38iuqvf5laum1tnj1hdn` |
+| `CognitoDomain` | `gnarly-naijei.auth.us-east-1.amazoncognito.com` |
+| `CognitoRedirectURI` | `https://naijei.com/gnarly/` |
+
+Navigator keys, in `navigator-unity/Assets/Resources/gnarly-api-base.txt` (a bare URL) and optional `gnarly-aws.txt`:
+
+| Key | Value |
+| --- | --- |
+| bare URL or `apiBase` | Lambda Function URL |
+| `cognitoDomain` | hosted domain, host only |
+| `cognitoClientId` | `1osnrt38iuqvf5laum1tnj1hdn` |
+| `cognitoUserPoolId` | `us-east-1_pQIUmVbPJ` |
+| `cognitoRedirectUri` | iOS callback only. The Editor stays on `http://localhost:5173/` |
+
+The Navigator iOS target is 17.4 so the https callback is available. The Firebase Apple / Unity SDK is not on the runtime path. Script type names that still say Firebase are kept so existing Unity scenes do not lose their references. The API process can still select `GNARLY_BACKEND=firebase`; these clients always speak the HTTP API and Cognito.
 
 ## Checks
 

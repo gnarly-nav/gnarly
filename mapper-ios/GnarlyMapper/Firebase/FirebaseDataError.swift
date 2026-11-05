@@ -20,9 +20,9 @@ enum FirebaseDataError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notConfigured:
-            return "Firebase is not configured. Add GoogleService-Info.plist to the GnarlyMapper target."
+            return "Cloud access is not configured."
         case .notAuthenticated:
-            return "Sign in before using Firestore or Cloud Storage."
+            return "Sign in before changing buildings."
         case let .invalidIdentifier(field):
             return "\(field) must be non-empty and cannot contain '/'."
         case .invalidJSON:

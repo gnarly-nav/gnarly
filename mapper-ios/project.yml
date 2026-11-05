@@ -3,26 +3,14 @@ options:
   bundleIdPrefix: com.gnarly
   deploymentTarget:
     # RoomCaptureView(frame:arSession:) requires iOS 17.
+    # Cognito hosted sign-in uses ASWebAuthenticationSession HTTPS callbacks (iOS 17.4).
     iOS: "17.0"
-packages:
-  Firebase:
-    url: https://github.com/firebase/firebase-ios-sdk.git
-    from: 12.19.2
 targets:
   GnarlyMapper:
     type: application
     platform: iOS
     sources:
       - path: GnarlyMapper
-    dependencies:
-      - package: Firebase
-        product: FirebaseCore
-      - package: Firebase
-        product: FirebaseAuth
-      - package: Firebase
-        product: FirebaseFirestore
-      - package: Firebase
-        product: FirebaseStorage
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.grantlin.gnarly.mapper
@@ -41,8 +29,6 @@ targets:
       - path: GnarlyMapperTests
     dependencies:
       - target: GnarlyMapper
-      - package: Firebase
-        product: FirebaseFirestore
 schemes:
   GnarlyMapper:
     build:

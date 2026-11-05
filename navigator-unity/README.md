@@ -1,6 +1,6 @@
 # Unity navigator
 
-Unity 6000.6.0f1 iOS app (URP, AR Foundation 6.6.2, Apple ARKit XR Plug-in 6.6.2). It signs in to Firebase, downloads the active building graph, normalized RoomPlan scan, USDZ structure, and zone ARWorldMap, caches them for offline use, relocalizes, and draws a path to the destination.
+Unity 6000.6.0f1 iOS app (URP, AR Foundation 6.6.2, Apple ARKit XR Plug-in 6.6.2). It loads the active building graph, normalized RoomPlan scan, USDZ structure, and zone ARWorldMap from the AWS publish API, caches them for offline use, relocalizes, and draws a path to the destination. Google sign-in is optional and uses Cognito. List and download work without an account.
 
 ## Project setup
 
@@ -8,22 +8,21 @@ Run **Gnarly → Configure Navigator Project** once after cloning, or after chan
 
 - builds `Assets/Scenes/Navigator.unity` with an AR Session, an XR Origin whose camera has the AR camera manager, background, and tracked pose driver, an EventSystem, and a `Navigator` object holding `RelocalizationController` and `RouteNavigator`. This becomes the only scene in the build. `SampleScene` is left from the template and is not used.
 - turns on the Apple ARKit loader for iOS and sets ARKit to **Required** (`iOSRequireARKit`).
-- sets bundle ID `com.gnarly.navigator`, the camera usage description, iOS 16.0 minimum, iPhone only, and Device SDK.
+- sets bundle ID `com.gnarly.navigator`, the camera usage description, iOS 17.4 minimum, iPhone only, and Device SDK.
 - adds the AR Background Renderer Feature to the URP renderers so the camera feed is visible.
-- creates the Git-ignored `Assets/StreamingAssets/zone-a/` folder and copies the navigator's local `FirebaseConfig/GoogleService-Info.plist` when available.
+- creates the Git-ignored `Assets/StreamingAssets/zone-a/` folder for a local scan.
 
 Batch mode: `Unity -batchmode -quit -projectPath navigator-unity -executeMethod NavigatorProjectSetup.ConfigureAll`.
 
 Then build:
 
-1. In the existing Firebase project, register a second iOS app whose bundle ID matches the Unity navigator (`com.gnarly.navigator` by default). Put its downloaded `GoogleService-Info.plist` in `navigator-unity/FirebaseConfig/`. **Gnarly → Configure Navigator Project** copies it into `Assets/StreamingAssets`; both locations are ignored by Git.
-2. In **File → Build Profiles**, choose **iOS**, click **Switch Platform**, then **Build**. This requires the iOS Build Support module.
-3. On a Mac, open `Unity-iPhone.xcodeproj`. Under **Signing & Capabilities**, choose your Team. If the default bundle ID is unavailable, change it in Unity Player Settings first, register that exact ID in Firebase, and use its matching plist before rebuilding. Run on the LiDAR iPhone and watch the Xcode console for `[Gnarly]` lines.
-4. In the navigator, enter a Firebase email/password plus the Firestore building and zone document IDs. Credentials are held in memory only. Choose **Use downloaded package offline** on later launches when the network is unavailable.
+1. In **File → Build Profiles**, choose **iOS**, click **Switch Platform**, then **Build**. This requires the iOS Build Support module. No Firebase plist is required.
+2. On a Mac, open `Unity-iPhone.xcodeproj`. Under **Signing & Capabilities**, choose your Team. If the default bundle ID is unavailable, change it in Unity Player Settings first, then rebuild. Run on a LiDAR iPhone with iOS 17.4 or later and watch the Xcode console for `[Gnarly]` lines.
+3. The launch screen lists published maps. **Google** opens the Cognito hosted UI. **Email** asks for the email and password of an existing Cognito user (`USER_SRP_AUTH`, the same challenge as the website) and does not create an account. Skipping sign-in still lists and downloads maps. A refresh token, when sign-in succeeds, is kept in the iOS Keychain. Downloaded maps work with the network off.
 
-## Firebase package source
+## Map source
 
-List and download go through the publish API. Put its origin in `Assets/Resources/gnarly-api-base.txt` (see `api/README.md`). The API returns short-lived signed URLs after checking the Firebase token, the building ACL, and the download rate limit. The navigator still stages the files and keeps the previous cache if a download stops midway.
+List and download go through the publish API. The origin is the bare URL in `Assets/Resources/gnarly-api-base.txt`. Optional overrides live in `Assets/Resources/gnarly-aws.txt` (`apiBase`, `cognitoDomain`, `cognitoClientId`, `cognitoUserPoolId`, `cognitoRedirectUri`). See [docs/aws.md](../docs/aws.md). The API returns short-lived signed S3 URLs. Anonymous reads are not rejected. A Cognito ID token is attached when the player is signed in. The navigator stages the files and keeps the previous cache if a download stops midway.
 
 The active package for a zone is:
 
@@ -33,7 +32,7 @@ The active package for a zone is:
 - `buildings/{buildingId}/{versionId}/zones/{zoneId}/structure.usdz`
 - `buildings/{buildingId}/{versionId}/worldmaps/{zoneId}.bin`
 
-All five files are downloaded to `Application.persistentDataPath/navigation-cache`. A staging directory and cache manifest prevent incomplete downloads from replacing the last complete package. Firestore and Storage are never accessed before email/password authentication succeeds. Versions uploaded before the interactive-map change do not contain the scan-features/USDZ pair and must be uploaded again from the mapper.
+All five files are downloaded to `Application.persistentDataPath/navigation-cache`. A staging directory and cache manifest prevent incomplete downloads from replacing the last complete package. The client does not call DynamoDB, S3, Firestore, or Cloud Storage. Versions uploaded before the interactive-map change do not contain the scan-features/USDZ pair and must be uploaded again from the mapper.
 
 `scan.json` remains the raw wrapped RoomPlan `CapturedRoom`; `scan-features.json` is its normalized geometry for Unity and selectable map nodes. `test-anchor.json` and `route.json` remain optional local development inputs.
 
@@ -41,7 +40,7 @@ All five files are downloaded to `Application.persistentDataPath/navigation-cach
 
 | File | Required | Use |
 | --- | --- | --- |
-| `worldmap-zone-a.bin` | Yes | Downloaded from Storage and applied to ARKit for relocalization |
+| `worldmap-zone-a.bin` | Yes | Downloaded from the signed package URL and applied to ARKit for relocalization |
 | `test-anchor.json` | No | Optional POC cube position ([schema](../shared/test-anchor.schema.json)) |
 | `scan.json` | Yes | Raw wrapped RoomPlan `CapturedRoom` retained for package fidelity |
 | `scan-features.json` | Yes | Normalized RoomPlan walls/doors/rooms used for the compact map and selectable nodes |
@@ -71,13 +70,13 @@ The `Zone Id` field on `RelocalizationController` is the zone the user starts in
 2. Starts A* from the chosen start point, or from the node nearest to you when the start is **My location**. The start must be in the current zone. Destinations can be in any zone; the route planner's list includes places from every zone, labeled with their zone.
 3. Splits the path into one leg per zone and draws only the current leg. A cross-floor leg ends at the elevator waypoint; a same-floor handoff ends at the continuation connector. On arrival, it applies the next zone's world map, shows **Entering &lt;zone&gt;… Look around**, and draws the next leg after relocalizing. **Reset map** relocalizes in the current zone and resumes the route. Continuations are ordinary map handoffs, not doors. Legacy stair-zone links use the same mechanism.
 
-With Firebase (`useFirebasePackages`, on by default), choosing a scan from the library downloads that zone and also tries every other zone of the same building into the offline cache. Other zones are then read from that cache. Connections are read from `buildings/{buildingId}/{versionId}/zone-connections.json` in Storage when present, otherwise from a bundled `StreamingAssets/zone-connections.json`. A zone that fails to download, for example because its version's `building.json` belongs to another zone, is logged and left out of routing. With Firebase off, every zone is read from `StreamingAssets/<zoneId>/`.
+With cloud maps (`useCloudPackages`, on by default; older scenes still say `useFirebasePackages`), choosing a scan from the library downloads that zone and also tries every other zone of the same building into the offline cache. Other zones are then read from that cache. Connections are read from `buildings/{buildingId}/{versionId}/zone-connections.json` when the package includes it, otherwise from a bundled `StreamingAssets/zone-connections.json`. A zone that fails to download, for example because its version's `building.json` belongs to another zone, is logged and left out of routing. With cloud maps off, every zone is read from `StreamingAssets/<zoneId>/`.
 
-The web editor may also save `buildings/{buildingId}/{versionId}/building-layout.json`. It is display-only placement metadata (floor, X/Z, rotation); Firebase downloads cache it alongside each zone. It must not be used to transform ARKit tracking or route coordinates.
+The web editor may also save `buildings/{buildingId}/{versionId}/building-layout.json`. It is display-only placement metadata (floor, X/Z, rotation). The download caches it alongside each zone. It must not be used to transform ARKit tracking or route coordinates.
 
 ## Behavior
 
-1. Firebase login and active-package download, or selection of a previously downloaded offline package.
+1. Map download from the publish API, or selection of a previously downloaded offline package. Sign-in is optional.
 2. **Starting camera…** until ARKit tracks.
 3. **Locating…** after the world map is applied, until ARKit reports it has relocalized.
 4. Once located, the **route planner** opens (see below). After you start navigation, Unity draws the A* path in AR. If a local test anchor exists, its cube is also shown. If tracking is lost, the path is hidden until tracking recovers. **Retry** resets the session and reapplies the cached map.
@@ -101,8 +100,9 @@ ARKit positions are converted to Unity by negating Z (right-handed to left-hande
 ## Scripts
 
 - `Assets/Scripts/RelocalizationController.cs`: session flow, map loading, cube placement, status UI. `skipWorldMap` is a debug toggle that skips relocalization so route coordinates are relative to where the app starts.
-- `Assets/Scripts/FirebaseNavigationPackageRepository.cs`: Firebase email/password authentication, Firestore metadata reads, Storage downloads, path validation, and atomic offline cache.
-- `Assets/Scripts/FirebaseNavigationPackageLoader.cs`: login/building/zone UI and offline-package selection.
+- `Assets/Scripts/FirebaseNavigationPackageRepository.cs`: Cognito sign-in, publish-API list and signed downloads, path validation, and atomic offline cache. The type name is unchanged so scenes keep the script.
+- `Assets/Scripts/CognitoAuth.cs`: PKCE and the hosted-UI browser (iOS plugin or the Editor’s localhost callback).
+- `Assets/Scripts/FirebaseNavigationPackageLoader.cs`: building and floor picker, optional Google or email sign-in, and offline-package selection.
 - `Assets/Scripts/RouteNavigator.cs`: path ribbon, waypoint markers, off-screen turn arrow.
 - `Assets/Scripts/LidarPulseView.cs`: **LiDAR** button (bottom left). Turns on ARKit scene depth via an `AROcclusionManager` with occlusion disabled, casts 1,200 random rays per depth frame out to 6 m and keeps the newest 300,000 hits in session space (rays are uniform across the view, so near surfaces are dense and far ones sparse), and draws it as dark green dots (`Assets/Resources/GnarlyLidarPoints.shader`) that brighten as a pulse sweeps out from the user every 1.6 s. Unlike feature points, LiDAR depth works in the dark. The cloud is cleared on relocalization and **Reset map**.
 - `Assets/Scripts/Pathfinding.cs`: RoomPlan visibility connections, multi-zone graph merging, and A*.

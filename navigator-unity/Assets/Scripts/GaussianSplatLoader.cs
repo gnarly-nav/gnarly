@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using UnityEngine;
-using Firebase.Storage;
+using UnityEngine.Networking;
 using GaussianSplatting;
 
 /// <summary>
@@ -30,7 +30,7 @@ public class GaussianSplatLoader : MonoBehaviour
     }
     
     /// <summary>
-    /// Load a Gaussian splat from Firebase Storage for the specified zone.
+    /// Load a Gaussian splat from a signed download URL or a file already cached by the navigator.
     /// </summary>
     public async Task<bool> LoadSplat(string splatPath, string format, Transform zoneRoot)
     {
@@ -50,13 +50,22 @@ public class GaussianSplatLoader : MonoBehaviour
         
         try
         {
-            // Download splat from Firebase Storage
-            var storage = FirebaseStorage.DefaultInstance;
-            var reference = storage.GetReference(splatPath);
-            var localPath = Path.Combine(Application.temporaryCachePath, $"zone-splat.{format}");
-            
-            Debug.Log($"Downloading splat from {splatPath} to {localPath}");
-            await reference.GetFileAsync(localPath);
+            var localPath = splatPath;
+            if (splatPath.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                splatPath.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                localPath = Path.Combine(Application.temporaryCachePath, $"zone-splat.{format}");
+                Debug.Log($"Downloading splat to {localPath}");
+                using var request = new UnityWebRequest(splatPath, UnityWebRequest.kHttpVerbGET)
+                {
+                    downloadHandler = new DownloadHandlerFile(localPath, true)
+                };
+                var completion = new TaskCompletionSource<bool>();
+                request.SendWebRequest().completed += _ => completion.TrySetResult(true);
+                await completion.Task;
+                if (request.result != UnityWebRequest.Result.Success)
+                    throw new InvalidOperationException(request.error ?? "Splat download failed.");
+            }
             
             // Load splat asset
             splatAsset = await LoadSplatAsset(localPath, format);

@@ -9,5 +9,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .environmentObject(FirebaseAuthSession())
+        .environmentObject(CognitoSession.shared)
 }

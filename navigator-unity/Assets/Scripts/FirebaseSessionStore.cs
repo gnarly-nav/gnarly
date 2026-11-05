@@ -2,8 +2,9 @@ using System;
 using System.Runtime.InteropServices;
 
 /// <summary>
-/// Keeps the Firebase refresh token in the iOS Keychain. PlayerPrefs is deliberately not used
+/// Keeps the Cognito refresh token in the iOS Keychain. PlayerPrefs is deliberately not used
 /// for credentials; it continues to store only the selected building and zone.
+/// The native symbol names stay so the existing iOS plugin still links.
 /// </summary>
 internal static class FirebaseSessionStore
 {

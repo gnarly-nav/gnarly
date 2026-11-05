@@ -16,6 +16,8 @@ public static class AppleRoomModelPreviewPostprocessor
         var frameworkTarget = project.GetUnityFrameworkTargetGuid();
         project.AddFrameworkToProject(frameworkTarget, "RealityKit.framework", false);
         project.AddFrameworkToProject(frameworkTarget, "CoreHaptics.framework", false);
+        project.AddFrameworkToProject(frameworkTarget, "AuthenticationServices.framework", false);
+        project.AddFrameworkToProject(project.GetUnityMainTargetGuid(), "AuthenticationServices.framework", false);
         project.WriteToFile(projectPath);
     }
 }

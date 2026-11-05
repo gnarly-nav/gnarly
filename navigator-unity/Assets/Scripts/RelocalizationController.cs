@@ -4,6 +4,7 @@ using System.IO;
 using Unity.Collections;
 using Unity.XR.CoreUtils;
 using UnityEngine;
+using UnityEngine.Serialization;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using UnityEngine.XR.ARFoundation;
@@ -66,8 +67,9 @@ public class RelocalizationController : MonoBehaviour
     [SerializeField] RouteNavigator navigator;
     [SerializeField] FirebaseNavigationPackageLoader packageLoader;
     [SerializeField] string buildingId = "";
-    [Tooltip("Enable after Firebase is configured. Disabled uses the packaged local scan so ARKit can relocalize immediately.")]
-    [SerializeField] bool useFirebasePackages = true;
+    [Tooltip("Download maps from the AWS publish API. Off uses the packaged local scan so ARKit can relocalize immediately.")]
+    [FormerlySerializedAs("useFirebasePackages")]
+    [SerializeField] bool useCloudPackages = true;
     [SerializeField] IndoorMapOverlay indoorMap;
     [SerializeField] LidarPulseView lidarView;
     [SerializeField] string zoneId = "zone-a";
@@ -134,7 +136,7 @@ public class RelocalizationController : MonoBehaviour
     string ZoneDirectory(string zone)
     {
         if (zone == zoneId && packageDirectory != null) return packageDirectory;
-        if (!useFirebasePackages) return Path.Combine(Application.streamingAssetsPath, zone);
+        if (!useCloudPackages) return Path.Combine(Application.streamingAssetsPath, zone);
         return packageLoader != null && packageLoader.TryGetCachedZoneDirectory(buildingId, zone, out var directory)
             ? directory
             : null;
@@ -145,7 +147,7 @@ public class RelocalizationController : MonoBehaviour
     {
         get
         {
-            if (useFirebasePackages && packageDirectory != null)
+            if (useCloudPackages && packageDirectory != null)
             {
                 var downloaded = Path.Combine(packageDirectory, ZoneConnectionsFileName);
                 if (File.Exists(downloaded)) return downloaded;
@@ -173,9 +175,9 @@ public class RelocalizationController : MonoBehaviour
     void Start()
     {
         currentZoneId = zoneId;
-        if (useFirebasePackages)
+        if (useCloudPackages)
         {
-            SetStatus("Preparing Firebase navigation package…");
+            SetStatus("Preparing the navigation map…");
             packageLoader.Begin(buildingId, zoneId, OnPackageReady, SetStatus);
             state = State.WaitingForPackage;
             return;
@@ -1303,7 +1305,7 @@ public class RelocalizationController : MonoBehaviour
         selectedStartKey = startKey;
         selectedDestinationKey = destinationKey;
         state = State.WaitingForSession;
-        var source = package.IsOfflineCache ? "offline cache" : "Firebase";
+        var source = package.IsOfflineCache ? "offline cache" : "AWS";
         SetStatus($"Loaded version {package.VersionId} from {source}. Starting camera…");
         Debug.Log($"[Gnarly] Navigation package ready at {packageDirectory}.");
     }

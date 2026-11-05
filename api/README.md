@@ -86,6 +86,6 @@ Signed upload URLs last 15 minutes. Signed download URLs last 5 minutes. A publi
 
 ## Clients
 
-- Mapper: `GnarlyApiBaseURL` in `mapper-ios/GnarlyMapper/Info.plist`. `http://127.0.0.1:8080` reaches a simulator. A device needs the deployed https origin.
-- Navigator: put the same origin on its own line in `navigator-unity/Assets/Resources/gnarly-api-base.txt`.
-- Web: `VITE_GNARLY_API_BASE` in `web/.env`. The site proxies signed `storage.googleapis.com` URLs through `/__signed`.
+- Mapper: `GnarlyApiBaseURL`, `CognitoUserPoolId`, `CognitoClientId`, `CognitoDomain`, and `CognitoRedirectURI` in `mapper-ios/GnarlyMapper/Info.plist`. The checked-in values point at the live Lambda URL and the existing Cognito app client. `http://127.0.0.1:8080` still works for a local API. Google sign-in is the Cognito hosted UI. Email and password use `USER_SRP_AUTH` on the same public client. Publish calls send the Cognito ID token.
+- Navigator: the origin is the bare URL in `navigator-unity/Assets/Resources/gnarly-api-base.txt`. Optional Cognito overrides are `apiBase`, `cognitoDomain`, `cognitoClientId`, `cognitoUserPoolId`, and `cognitoRedirectUri` in `gnarly-aws.txt`. List and download work without a token. A signed-in player sends the Cognito ID token.
+- Web: `VITE_GNARLY_API_BASE` in `web/.env`. The site proxies signed `storage.googleapis.com` URLs through `/__signed`. Mobile clients do not use that proxy; they PUT and GET the presigned S3 URLs directly.
