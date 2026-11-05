@@ -2,8 +2,8 @@ import AuthenticationServices
 import Foundation
 import UIKit
 
-/// Presents Cognito's hosted UI and returns the redirect to Unity.
-/// Uses the https callback already registered for the website (iOS 17.4+).
+/// Presents Cognito's hosted UI and returns the custom-scheme redirect to Unity.
+/// `gnarlynavigator://auth/` does not need an associated domain.
 private let cognitoLock = NSLock()
 private var cognitoResult: String?
 private var cognitoSession: ASWebAuthenticationSession?
@@ -17,18 +17,18 @@ public func gnarlyCognitoBegin(_ authorizeRaw: UnsafePointer<CChar>?, _ redirect
         cognitoLock.lock()
         cognitoResult = nil
         cognitoLock.unlock()
-        guard let url = URL(string: authorize),
-              let parts = URLComponents(string: redirect),
-              let host = parts.host, !host.isEmpty else {
+        guard let url = URL(string: authorize) else {
             cognitoStore("err\nThe Cognito sign-in URL is invalid.")
             return
         }
-        let path = parts.path.isEmpty ? "/" : parts.path
-        guard #available(iOS 17.4, *) else {
-            cognitoStore("err\nSign in needs iOS 17.4 or later.")
+        guard let scheme = URLComponents(string: redirect)?.scheme?.lowercased(),
+              !scheme.isEmpty,
+              scheme != "http",
+              scheme != "https" else {
+            cognitoStore("err\nThe Cognito redirect must use the gnarlynavigator URL scheme.")
             return
         }
-        let session = ASWebAuthenticationSession(url: url, callback: .https(host: host, path: path)) { callbackURL, error in
+        let session = ASWebAuthenticationSession(url: url, callbackURLScheme: scheme) { callbackURL, error in
             if let callbackURL {
                 cognitoStore("ok\n" + callbackURL.absoluteString)
                 return

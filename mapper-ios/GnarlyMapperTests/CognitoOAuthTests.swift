@@ -6,7 +6,7 @@ final class CognitoOAuthTests: XCTestCase {
         let url = try XCTUnwrap(CognitoOAuth.authorizeURL(
             domain: "https://gnarly-naijei.auth.us-east-1.amazoncognito.com/",
             clientID: "1osnrt38iuqvf5laum1tnj1hdn",
-            redirectURI: "https://naijei.com/gnarly/",
+            redirectURI: "gnarlymapper://auth/",
             challenge: "abc",
             state: "state-1",
             identityProvider: "Google"
@@ -17,7 +17,8 @@ final class CognitoOAuthTests: XCTestCase {
         XCTAssertEqual(items["identity_provider"], "Google")
         XCTAssertEqual(items["response_type"], "code")
         XCTAssertEqual(items["client_id"], "1osnrt38iuqvf5laum1tnj1hdn")
-        XCTAssertEqual(items["redirect_uri"], "https://naijei.com/gnarly/")
+        XCTAssertEqual(items["redirect_uri"], "gnarlymapper://auth/")
+        XCTAssertEqual(CognitoOAuth.defaultRedirectURI, "gnarlymapper://auth/")
         XCTAssertEqual(items["scope"], "openid email")
         XCTAssertEqual(items["code_challenge"], "abc")
         XCTAssertEqual(items["code_challenge_method"], "S256")
@@ -50,11 +51,13 @@ final class CognitoOAuthTests: XCTestCase {
         XCTAssertEqual(claims.email, "NJ277@cornell.edu")
         XCTAssertTrue(claims.emailVerified)
         XCTAssertEqual(claims.exp, 10)
-        XCTAssertEqual(CognitoOAuth.callbackParts(redirectURI: "https://naijei.com/gnarly/")?.host, "naijei.com")
-        XCTAssertEqual(CognitoOAuth.callbackParts(redirectURI: "https://naijei.com/gnarly/")?.path, "/gnarly/")
+        XCTAssertEqual(CognitoOAuth.callbackScheme(redirectURI: "gnarlymapper://auth/"), "gnarlymapper")
+        XCTAssertEqual(CognitoOAuth.callbackScheme(redirectURI: "GnarlyMapper://auth/"), "gnarlymapper")
+        XCTAssertNil(CognitoOAuth.callbackScheme(redirectURI: "https://naijei.com/gnarly/"))
+        XCTAssertNil(CognitoOAuth.callbackScheme(redirectURI: "http://localhost:5173/"))
         XCTAssertEqual(
-            CognitoOAuth.authorizationCodeBody(clientID: "client", code: "auth-code", redirectURI: "http://localhost:5173/", verifier: "verifier"),
-            "grant_type=authorization_code&client_id=client&code=auth-code&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2F&code_verifier=verifier"
+            CognitoOAuth.authorizationCodeBody(clientID: "client", code: "auth-code", redirectURI: CognitoOAuth.defaultRedirectURI, verifier: "verifier"),
+            "grant_type=authorization_code&client_id=client&code=auth-code&redirect_uri=gnarlymapper%3A%2F%2Fauth%2F&code_verifier=verifier"
         )
     }
 

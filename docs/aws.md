@@ -67,7 +67,7 @@ VITE_ADMIN_EMAILS=nj277@cornell.edu
 VITE_BASE=/gnarly/
 ```
 
-`VITE_BASE=/gnarly/` is for a build served at `https://naijei.com/gnarly/`. Local `npm run dev` should leave `VITE_BASE=/` and set `VITE_COGNITO_REDIRECT_URI=http://localhost:5173/`. Those two callback and logout URLs are the ones registered on the app client. The redirect URI used to start sign-in must be the same value sent to the token endpoint, and it has to be the page the browser is actually on.
+`VITE_BASE=/gnarly/` is for a build served at `https://naijei.com/gnarly/`. Local `npm run dev` should leave `VITE_BASE=/` and set `VITE_COGNITO_REDIRECT_URI=http://localhost:5173/`. The website’s callback and logout URLs on the app client are those two. The same public client also allows `gnarlymapper://auth/` and `gnarlynavigator://auth/` as callback and logout URLs for the iOS apps. The redirect URI used to start sign-in must be the same value sent to the token endpoint. On the website it has to be the page the browser is actually on.
 
 ## Deploy the API (not done here)
 
@@ -116,7 +116,7 @@ The mapper and the Navigator use this API and Cognito. They do not call DynamoDB
 
 Both reuse the existing public app client (`1osnrt38iuqvf5laum1tnj1hdn`). Its ID tokens already pass `COGNITO_CLIENT_ID`. A second app client is not required: Google sign-in is the hosted UI with PKCE, and the redirect URLs already registered on that client are enough. Email and password use `USER_SRP_AUTH` against `cognito-idp`, the same public client and the same challenge as the website. Neither client creates users.
 
-- iOS (mapper and Navigator) uses `https://naijei.com/gnarly/`. `ASWebAuthenticationSession` on iOS 17.4 intercepts that https callback, so no custom URL scheme and no extra Google iOS client ID are added.
+- The mapper uses `gnarlymapper://auth/`. The navigator on a device uses `gnarlynavigator://auth/`. `ASWebAuthenticationSession` is opened with that custom scheme (`callbackURLScheme`), so the apps do not need Associated Domains or an Apple app-site association file. The website keeps `https://naijei.com/gnarly/`. No extra Google iOS client ID is added.
 - The Unity Editor uses `http://localhost:5173/`. Quit anything else listening on that port (often `npm run dev`) before signing in from the Editor.
 - Navigator map list and download work with no token. When a Cognito session exists, the ID token is sent. Publish, placement, and layout edits from the mapper require the verified admin email.
 
@@ -130,7 +130,7 @@ Mapper keys in `mapper-ios/GnarlyMapper/Info.plist` (defaults match the live acc
 | `CognitoUserPoolId` | `us-east-1_pQIUmVbPJ` |
 | `CognitoClientId` | `1osnrt38iuqvf5laum1tnj1hdn` |
 | `CognitoDomain` | `gnarly-naijei.auth.us-east-1.amazoncognito.com` |
-| `CognitoRedirectURI` | `https://naijei.com/gnarly/` |
+| `CognitoRedirectURI` | `gnarlymapper://auth/` |
 
 Navigator keys, in `navigator-unity/Assets/Resources/gnarly-api-base.txt` (a bare URL) and optional `gnarly-aws.txt`:
 
@@ -140,9 +140,9 @@ Navigator keys, in `navigator-unity/Assets/Resources/gnarly-api-base.txt` (a bar
 | `cognitoDomain` | hosted domain, host only |
 | `cognitoClientId` | `1osnrt38iuqvf5laum1tnj1hdn` |
 | `cognitoUserPoolId` | `us-east-1_pQIUmVbPJ` |
-| `cognitoRedirectUri` | iOS callback only. The Editor stays on `http://localhost:5173/` |
+| `cognitoRedirectUri` | Device callback only (`gnarlynavigator://auth/`). The Editor stays on `http://localhost:5173/` |
 
-The Navigator iOS target is 17.4 so the https callback is available. The Firebase Apple / Unity SDK is not on the runtime path. Script type names that still say Firebase are kept so existing Unity scenes do not lose their references. The API process can still select `GNARLY_BACKEND=firebase`; these clients always speak the HTTP API and Cognito.
+The navigator iOS target stays 17.4. The Firebase Apple / Unity SDK is not on the runtime path. Script type names that still say Firebase are kept so existing Unity scenes do not lose their references. The API process can still select `GNARLY_BACKEND=firebase`; these clients always speak the HTTP API and Cognito.
 
 ## Checks
 

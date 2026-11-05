@@ -46,6 +46,7 @@ public static class NavigatorProjectSetup
         PlayerSettings.iOS.targetOSVersionString = "17.4";
         PlayerSettings.iOS.targetDevice = iOSTargetDevice.iPhoneOnly;
         PlayerSettings.iOS.sdkVersion = iOSSdkVersion.DeviceSDK;
+        PlayerSettings.iOS.iOSUrlSchemes = new[] { "gnarlynavigator" };
         // The AR camera pose, projection and background are each derived from the interface
         // orientation; autorotation lets them disagree for a frame or more and the UI is portrait-only.
         PlayerSettings.defaultInterfaceOrientation = UIOrientation.Portrait;

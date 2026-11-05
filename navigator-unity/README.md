@@ -8,7 +8,7 @@ Run **Gnarly → Configure Navigator Project** once after cloning, or after chan
 
 - builds `Assets/Scenes/Navigator.unity` with an AR Session, an XR Origin whose camera has the AR camera manager, background, and tracked pose driver, an EventSystem, and a `Navigator` object holding `RelocalizationController` and `RouteNavigator`. This becomes the only scene in the build. `SampleScene` is left from the template and is not used.
 - turns on the Apple ARKit loader for iOS and sets ARKit to **Required** (`iOSRequireARKit`).
-- sets bundle ID `com.gnarly.navigator`, the camera usage description, iOS 17.4 minimum, iPhone only, and Device SDK.
+- sets bundle ID `com.gnarly.navigator`, the camera usage description, iOS 17.4 minimum, iPhone only, Device SDK, and the `gnarlynavigator` URL scheme used by Google sign-in.
 - adds the AR Background Renderer Feature to the URP renderers so the camera feed is visible.
 - creates the Git-ignored `Assets/StreamingAssets/zone-a/` folder for a local scan.
 
@@ -18,7 +18,7 @@ Then build:
 
 1. In **File → Build Profiles**, choose **iOS**, click **Switch Platform**, then **Build**. This requires the iOS Build Support module. No Firebase plist is required.
 2. On a Mac, open `Unity-iPhone.xcodeproj`. Under **Signing & Capabilities**, choose your Team. If the default bundle ID is unavailable, change it in Unity Player Settings first, then rebuild. Run on a LiDAR iPhone with iOS 17.4 or later and watch the Xcode console for `[Gnarly]` lines.
-3. The launch screen lists published maps. **Google** opens the Cognito hosted UI. **Email** asks for the email and password of an existing Cognito user (`USER_SRP_AUTH`, the same challenge as the website) and does not create an account. Skipping sign-in still lists and downloads maps. A refresh token, when sign-in succeeds, is kept in the iOS Keychain. Downloaded maps work with the network off.
+3. The launch screen lists published maps. **Google** opens the Cognito hosted UI. On a device the callback is `gnarlynavigator://auth/`. In the Editor it is `http://localhost:5173/`. **Email** asks for the email and password of an existing Cognito user (`USER_SRP_AUTH`, the same challenge as the website) and does not create an account. Skipping sign-in still lists and downloads maps. A refresh token, when sign-in succeeds, is kept in the iOS Keychain. Downloaded maps work with the network off.
 
 ## Map source
 
@@ -101,7 +101,7 @@ ARKit positions are converted to Unity by negating Z (right-handed to left-hande
 
 - `Assets/Scripts/RelocalizationController.cs`: session flow, map loading, cube placement, status UI. `skipWorldMap` is a debug toggle that skips relocalization so route coordinates are relative to where the app starts.
 - `Assets/Scripts/FirebaseNavigationPackageRepository.cs`: Cognito sign-in, publish-API list and signed downloads, path validation, and atomic offline cache. The type name is unchanged so scenes keep the script.
-- `Assets/Scripts/CognitoAuth.cs`: PKCE and the hosted-UI browser (iOS plugin or the Editor’s localhost callback).
+- `Assets/Scripts/CognitoAuth.cs`: PKCE and the hosted-UI browser. A device uses `gnarlynavigator://auth/`. The Editor uses `http://localhost:5173/`.
 - `Assets/Scripts/FirebaseNavigationPackageLoader.cs`: building and floor picker, optional Google or email sign-in, and offline-package selection.
 - `Assets/Scripts/RouteNavigator.cs`: path ribbon, waypoint markers, off-screen turn arrow.
 - `Assets/Scripts/LidarPulseView.cs`: **LiDAR** button (bottom left). Turns on ARKit scene depth via an `AROcclusionManager` with occlusion disabled, casts 1,200 random rays per depth frame out to 6 m and keeps the newest 300,000 hits in session space (rays are uniform across the view, so near surfaces are dense and far ones sparse), and draws it as dark green dots (`Assets/Resources/GnarlyLidarPoints.shader`) that brighten as a pulse sweeps out from the user every 1.6 s. Unlike feature points, LiDAR depth works in the dark. The cloud is cleared on relocalization and **Reset map**.
