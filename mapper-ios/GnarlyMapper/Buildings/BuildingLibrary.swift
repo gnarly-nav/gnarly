@@ -13,7 +13,7 @@ final class BuildingLibrary: ObservableObject {
         errorMessage = nil
         defer { isLoading = false }
         do {
-            buildings = try await FirebaseDataRepository().listBuildings()
+            buildings = try await PackagePublishClient.live().listBuildings()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -28,15 +28,23 @@ final class BuildingLibrary: ObservableObject {
     }
 
     func saveAlignment(building: OwnedBuilding, layout: BuildingLayoutDocument) async throws {
-        let repository = try FirebaseDataRepository()
-        try await repository.updateBuildingPlacement(
+        let api = try PackagePublishClient.live()
+        try await api.savePlacement(
             buildingId: building.id,
             latitude: building.latitude,
             longitude: building.longitude,
             heading: building.mapHeadingDegrees
         )
         if let versionId = building.activeVersion, !versionId.isEmpty {
-            _ = try await repository.uploadBuildingLayout(layout, buildingId: building.id, versionId: versionId)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            let data = try encoder.encode(LayoutWire(
+                schemaVersion: layout.schemaVersion,
+                zones: layout.zones,
+                floors: layout.floors,
+                notes: layout.notes
+            ))
+            try await api.saveLayout(buildingId: building.id, versionId: versionId, data: data)
         }
         replace(building)
     }
@@ -56,24 +64,36 @@ final class BuildingLibrary: ObservableObject {
             longitude: longitude,
             mapHeadingDegrees: heading
         )
-        try await FirebaseDataRepository().createBuilding(building)
+        try await PackagePublishClient.live().ensureBuilding(
+            id: id,
+            name: building.name,
+            latitude: latitude,
+            longitude: longitude,
+            heading: heading
+        )
         let owned = OwnedBuilding(building, id: id)
         buildings.insert(owned, at: 0)
         return owned
     }
 
     func loadMap(for building: OwnedBuilding) async throws -> BuildingMap {
-        let repository = try FirebaseDataRepository()
+        let api = try PackagePublishClient.live()
         guard let versionId = building.activeVersion, !versionId.isEmpty else {
             return BuildingMap(building: building, versionId: nil, layout: BuildingLayoutDocument(), zones: [])
         }
-        let records = try await repository.listZones(buildingId: building.id, versionId: versionId)
-        var layout = try await repository.downloadBuildingLayout(buildingId: building.id, versionId: versionId) ?? BuildingLayoutDocument()
+        let package = try await api.package(buildingId: building.id, versionId: versionId)
+        var layout = BuildingLayoutDocument()
+        if let layoutFile = package.files.first(where: { $0.name == "building-layout.json" }),
+           let data = try? await api.download(layoutFile.url),
+           let decoded = try? JSONDecoder().decode(BuildingLayoutDocument.self, from: data) {
+            layout = decoded
+        }
         var zones: [BuildingZone] = []
-        for zone in records {
-            guard let zoneId = zone.id else { continue }
+        for zone in package.zones {
+            let zoneId = zone.zoneId
+            let floorId = zone.floorId ?? "ground"
             if layout.entry(for: zoneId) == nil {
-                let level = inferredLevel(zone.floorId)
+                let level = inferredLevel(floorId)
                 let siblings = layout.zones.filter { $0.floor == level }
                 let siblingBounds = siblings.isEmpty ? nil : FloorBounds(
                     minX: Float(siblings.map(\.x).min() ?? 0),
@@ -83,19 +103,20 @@ final class BuildingLibrary: ObservableObject {
                 )
                 layout.upsert(.beside(levelBounds: siblingBounds, zoneId: zoneId, level: level))
             }
-            let features = try await loadFeatures(zone: zone, buildingId: building.id, versionId: versionId, repository: repository)
+            let featuresFile = zone.files.first { $0.name == "scan-features.json" }
+            let features = try await loadFeatures(file: featuresFile, api: api)
             let surfaces = features.map(BakeSurface.from) ?? []
-            let colors = try await loadColors(zone: zone, repository: repository)
+            let colors = try await loadColors(files: zone.files, api: api)
             let ground = BuildingMesh.ground(of: surfaces)
-            let placement = layout.entry(for: zoneId) ?? .beside(levelBounds: nil, zoneId: zoneId, level: inferredLevel(zone.floorId))
+            let placement = layout.entry(for: zoneId) ?? .beside(levelBounds: nil, zoneId: zoneId, level: inferredLevel(floorId))
             zones.append(BuildingZone(
                 record: ZoneRecord(
                     id: zoneId,
-                    name: zone.name,
-                    floorId: zone.floorId,
-                    scanFeaturesPath: zone.scanFeaturesPath,
-                    surfaceColorsPath: zone.surfaceColorsPath,
-                    surfaceColorAtlasPath: zone.surfaceColorAtlasPath
+                    name: zone.name?.isEmpty == false ? zone.name! : zoneId,
+                    floorId: floorId,
+                    scanFeaturesPath: featuresFile?.path,
+                    surfaceColorsPath: zone.files.first { $0.name == "surface-colors.json" }?.path,
+                    surfaceColorAtlasPath: zone.files.first { $0.name == "surface-colors.jpg" }?.path
                 ),
                 placement: placement,
                 surfaces: surfaces,
@@ -104,7 +125,7 @@ final class BuildingLibrary: ObservableObject {
                 atlas: colors.atlas,
                 ground: ground,
                 localBounds: BuildingMesh.bounds(of: surfaces),
-                loadIssue: features == nil && zone.scanFeaturesPath != nil ? "This zone has no drawable scan yet." : nil
+                loadIssue: features == nil && featuresFile != nil ? "This zone has no drawable scan yet." : nil
             ))
         }
         return BuildingMap(building: building, versionId: versionId, layout: layout, zones: zones)
@@ -124,20 +145,16 @@ final class BuildingLibrary: ObservableObject {
         return try? await snapshot.start().image
     }
 
-    private func loadFeatures(zone: Zone, buildingId: String, versionId: String, repository: FirebaseDataRepository) async throws -> ScanFeatures? {
-        let path = zone.scanFeaturesPath ?? (try? FirebaseStoragePaths.zoneScanFeatures(buildingId: buildingId, versionId: versionId, zoneId: zone.id ?? ""))
-        guard let path, let url = try await repository.downloadOptional(storagePath: path) else { return nil }
-        return try JSONDecoder().decode(ScanFeatures.self, from: Data(contentsOf: url))
+    private func loadFeatures(file: PublishedFile?, api: PackagePublishClient) async throws -> ScanFeatures? {
+        guard let file else { return nil }
+        return try JSONDecoder().decode(ScanFeatures.self, from: try await api.download(file.url))
     }
 
-    private func loadColors(zone: Zone, repository: FirebaseDataRepository) async throws -> (document: SurfaceColorDocument?, atlas: UIImage?) {
-        guard let jsonPath = zone.surfaceColorsPath, let atlasPath = zone.surfaceColorAtlasPath else { return (nil, nil) }
-        guard let jsonURL = try await repository.downloadOptional(storagePath: jsonPath) else { return (nil, nil) }
-        let document = try JSONDecoder().decode(SurfaceColorDocument.self, from: Data(contentsOf: jsonURL))
-        var atlas: UIImage?
-        if let atlasURL = try await repository.downloadOptional(storagePath: atlasPath) {
-            atlas = UIImage(data: try Data(contentsOf: atlasURL))
-        }
+    private func loadColors(files: [PublishedFile], api: PackagePublishClient) async throws -> (document: SurfaceColorDocument?, atlas: UIImage?) {
+        guard let json = files.first(where: { $0.name == "surface-colors.json" }),
+              let atlasFile = files.first(where: { $0.name == "surface-colors.jpg" }) else { return (nil, nil) }
+        let document = try JSONDecoder().decode(SurfaceColorDocument.self, from: try await api.download(json.url))
+        let atlas = UIImage(data: try await api.download(atlasFile.url))
         return (document, atlas)
     }
 }

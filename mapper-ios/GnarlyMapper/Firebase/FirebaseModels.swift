@@ -1,4 +1,3 @@
-import FirebaseFirestore
 import Foundation
 
 enum RecordStatus: String, Codable, CaseIterable {
@@ -11,13 +10,13 @@ enum RecordStatus: String, Codable, CaseIterable {
 }
 
 struct Building: Codable, Identifiable {
-    @DocumentID var id: String?
+    var id: String?
     var name: String
     var activeVersion: String?
     var status: RecordStatus
     var createdAt: Date?
     var updatedAt: Date?
-    /// Firebase Auth UID of the account that may edit this building.
+    /// Account that may edit this building. The API sets this from the Cognito subject.
     var ownerUid: String? = nil
     /// Where the building layout's origin sits on Earth. The web explorer reads the same fields.
     var latitude: Double? = nil
@@ -27,7 +26,7 @@ struct Building: Codable, Identifiable {
 }
 
 struct BuildingVersion: Codable, Identifiable {
-    @DocumentID var id: String?
+    var id: String?
     var versionNumber: Int
     var status: RecordStatus
     var buildingJsonPath: String?
@@ -37,14 +36,14 @@ struct BuildingVersion: Codable, Identifiable {
 }
 
 struct Floor: Codable, Identifiable {
-    @DocumentID var id: String?
+    var id: String?
     var name: String
     var story: Int
     var elevation: Double
 }
 
 struct Zone: Codable, Identifiable {
-    @DocumentID var id: String?
+    var id: String?
     var name: String
     var floorId: String
     var worldMapPath: String?
@@ -59,7 +58,7 @@ struct Zone: Codable, Identifiable {
 }
 
 struct Destination: Codable, Identifiable {
-    @DocumentID var id: String?
+    var id: String?
     var name: String
     var aliases: [String]
     var floorId: String
@@ -75,7 +74,7 @@ struct Position3D: Codable, Equatable {
 }
 
 struct NavigationNode: Codable, Identifiable {
-    @DocumentID var id: String?
+    var id: String?
     var floorId: String
     var zoneId: String
     var type: String
@@ -83,7 +82,7 @@ struct NavigationNode: Codable, Identifiable {
 }
 
 struct NavigationEdge: Codable, Identifiable {
-    @DocumentID var id: String?
+    var id: String?
     var from: String
     var to: String
     var kind: String

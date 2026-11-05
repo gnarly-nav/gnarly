@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct AppRootView: View {
-    @EnvironmentObject private var auth: FirebaseAuthSession
+    @EnvironmentObject private var auth: CognitoSession
     @AppStorage("gnarly.mapper.didOnboard") private var didOnboard = false
     @StateObject private var library = BuildingLibrary()
 

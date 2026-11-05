@@ -1,5 +1,4 @@
 import ARKit
-import FirebaseAuth
 import Foundation
 import OSLog
 import RoomPlan
@@ -524,7 +523,7 @@ final class MapperViewModel: ObservableObject {
 
     func uploadPackage(buildingID rawBuildingID: String, versionID rawVersionID: String, zoneID rawZoneID: String, floorID rawFloorID: String, startNextZone: Bool = false, onNextZone: @escaping (String) -> Void = { _ in }) {
         guard let packageURL = exportURL else { showError("Export the scan before uploading it."); return }
-        guard Auth.auth().currentUser != nil else { showError("Connect Firebase and sign in before uploading."); return }
+        guard CognitoSession.shared.isAuthenticated else { showError("Sign in before uploading."); return }
         let buildingID = rawBuildingID.trimmingCharacters(in: .whitespacesAndNewlines)
         let versionID = rawVersionID.trimmingCharacters(in: .whitespacesAndNewlines)
         let zoneID = rawZoneID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -537,7 +536,6 @@ final class MapperViewModel: ObservableObject {
         uploadAttemptID = attemptID
         let uploadTask = Task { @MainActor [self] in
             do {
-                let repository = try FirebaseDataRepository()
                 let buildingJSON = packageURL.appendingPathComponent("building.json")
                 let scanJSON = packageURL.appendingPathComponent("scan.json")
                 let scanFeatures = packageURL.appendingPathComponent("scan-features.json")
@@ -550,25 +548,17 @@ final class MapperViewModel: ObservableObject {
                       FileManager.default.fileExists(atPath: worldMap.path) else {
                     throw CocoaError(.fileNoSuchFile)
                 }
-                statusText = "Checking Firebase building…"
-                let owner = Auth.auth().currentUser?.uid
+                statusText = "Checking the building…"
                 let existing = activeBuilding
-                do {
-                    try await repository.createBuilding(Building(
-                        id: buildingID,
-                        name: existing?.name ?? buildingID,
-                        activeVersion: nil,
-                        status: .draft,
-                        createdAt: nil,
-                        updatedAt: nil,
-                        ownerUid: owner,
-                        latitude: existing?.latitude,
-                        longitude: existing?.longitude,
-                        mapHeadingDegrees: existing?.mapHeadingDegrees
-                    ))
-                } catch FirebaseDataError.documentAlreadyExists { }
-                try Task.checkCancellation()
                 let api = try PackagePublishClient.live()
+                try await api.ensureBuilding(
+                    id: buildingID,
+                    name: existing?.name ?? buildingID,
+                    latitude: existing?.latitude,
+                    longitude: existing?.longitude,
+                    heading: existing?.mapHeadingDegrees
+                )
+                try Task.checkCancellation()
                 var files = [
                     PackageUpload(name: "building.json", zoneId: zoneID, contentType: "application/json", fileURL: buildingJSON),
                     PackageUpload(name: "scan.json", zoneId: zoneID, contentType: "application/json", fileURL: scanJSON),
@@ -640,12 +630,12 @@ final class MapperViewModel: ObservableObject {
             uploadLogger.error("Package upload timed out at step: \(self.statusText, privacy: .public)")
             uploadAttemptID = nil
             isUploading = false
-            showError("Firebase did not finish within 3 minutes (last step: \(self.statusText)). Check the iPhone’s connection, then retry. A Firebase write already in progress may finish in the background.")
+            showError("The upload did not finish within 3 minutes (last step: \(self.statusText)). Check the iPhone’s connection, then retry. An upload already in progress may finish in the background.")
         }
     }
 
     func uploadZoneConnections(buildingID rawBuildingID: String, versionID rawVersionID: String, json: String) {
-        guard Auth.auth().currentUser != nil else { showError("Connect Firebase and sign in before uploading."); return }
+        guard CognitoSession.shared.isAuthenticated else { showError("Sign in before uploading."); return }
         let buildingID = rawBuildingID.trimmingCharacters(in: .whitespacesAndNewlines)
         let versionID = rawVersionID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !buildingID.isEmpty, !versionID.isEmpty else { showError("Building and version IDs are required."); return }

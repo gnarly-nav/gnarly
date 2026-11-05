@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -15,6 +16,9 @@ public sealed partial class FirebaseNavigationPackageLoader
     Text launchStatus;
     Button launchPrimary;
     Text launchPrimaryLabel;
+    Button signInButton;
+    Text signInLabel;
+    Button emailButton;
     FirebaseScanChoice selectedScan;
     string expandedBuildingId;
     System.Collections.Generic.List<FirebaseScanChoice> renderedLibrary;
@@ -36,7 +40,7 @@ public sealed partial class FirebaseNavigationPackageLoader
         var header = MapUi.Rect("Header", safe, new Vector2(0, 1), Vector2.one,
             new Vector2(44, -310), new Vector2(-44, -16));
         launchTitle = MapUi.Label(MapUi.Rect("Title", header, new Vector2(0, 1), Vector2.one,
-            new Vector2(0, -94), Vector2.zero), "Explore indoors", 64, MapUi.TextPrimary,
+            new Vector2(0, -94), new Vector2(-270, 0)), "Explore indoors", 64, MapUi.TextPrimary,
             TextAnchor.MiddleLeft, FontStyle.Bold);
         launchSubtitle = MapUi.Label(MapUi.Rect("Subtitle", header, new Vector2(0, 1), Vector2.one,
             new Vector2(0, -168), new Vector2(0, -92)), "Choose the map where you are now.", 31,
@@ -52,6 +56,11 @@ public sealed partial class FirebaseNavigationPackageLoader
         launchStatus.resizeTextForBestFit = true;
         launchStatus.resizeTextMinSize = 22;
         launchStatus.resizeTextMaxSize = 28;
+        signInButton = MapUi.Button(MapUi.Rect("GoogleSignIn", header, new Vector2(1, 1), new Vector2(1, 1),
+            new Vector2(-250, -86), new Vector2(0, -16)), "", MapUi.SurfaceRaised, MapUi.TextPrimary, 26, OnGoogleSignIn, 18f);
+        signInLabel = MapUi.ButtonLabel(signInButton);
+        emailButton = MapUi.Button(MapUi.Rect("EmailSignIn", header, new Vector2(1, 1), new Vector2(1, 1),
+            new Vector2(-250, -156), new Vector2(0, -96)), "Email", MapUi.SurfaceRaised, MapUi.TextSecondary, 26, OnEmailSignIn, 18f);
 
         var scrollRoot = MapUi.Rect("MapChoices", safe, Vector2.zero, Vector2.one,
             new Vector2(0, 204), new Vector2(0, -324));
@@ -315,6 +324,46 @@ public sealed partial class FirebaseNavigationPackageLoader
             "Check your connection or ask the map owner to publish a map.", 28, MapUi.TextSecondary);
     }
 
+    void OnGoogleSignIn()
+    {
+        if (busy || repository == null) return;
+        if (repository.IsAuthenticated)
+        {
+            repository.ForgetSavedSession();
+            SetStatus("Signed out. Maps stay available without an account.");
+            return;
+        }
+        _ = SignInAsync(true);
+    }
+
+    void OnEmailSignIn()
+    {
+        if (busy || repository == null || repository.IsAuthenticated) return;
+        _ = SignInAsync(false);
+    }
+
+    async Task SignInAsync(bool google)
+    {
+        if (busy) return;
+        busy = true;
+        try
+        {
+            SetStatus(google ? "Opening Google sign-in…" : "Opening email sign-in…");
+            if (google) await repository.SignInWithGoogleAsync();
+            else await repository.SignInWithEmailAsync();
+            SetStatus(string.IsNullOrEmpty(repository.Email) ? "Signed in." : "Signed in as " + repository.Email + ".");
+        }
+        catch (Exception exception)
+        {
+            SetStatus(exception.Message);
+        }
+        finally
+        {
+            busy = false;
+            RefreshUi();
+        }
+    }
+
     void OnPrimaryAction()
     {
         if (busy) return;
@@ -354,6 +403,7 @@ public sealed partial class FirebaseNavigationPackageLoader
             if (launchPrimaryLabel != null) launchPrimaryLabel.text = busy ? "Preparing places…" : routeDestinationKey != null
                 ? "Continue to camera" : routeSkipDestination ? "Open minimap" : "Select a destination";
             if (launchPrimary != null) launchPrimary.interactable = !busy && (routeDestinationKey != null || routeSkipDestination);
+            RefreshSignIn();
             return;
         }
         var hasMaps = library != null && library.Count > 0;
@@ -362,7 +412,16 @@ public sealed partial class FirebaseNavigationPackageLoader
         if (launchStatus != null) launchStatus.text = status;
         if (launchPrimaryLabel != null) launchPrimaryLabel.text = busy ? "Finding maps…" :
             selectedScan != null ? "Open selected floor" : hasMaps ? "Select a floor" : "Retry";
-        if (launchPrimary != null) launchPrimary.interactable = !busy && (hasMaps ? selectedScan != null : firebaseConfig != null);
+        if (launchPrimary != null) launchPrimary.interactable = !busy && (hasMaps ? selectedScan != null : repository != null);
+        RefreshSignIn();
+    }
+
+    void RefreshSignIn()
+    {
+        var signedIn = repository != null && repository.IsAuthenticated;
+        if (signInLabel != null) signInLabel.text = signedIn ? "Sign out" : "Google";
+        if (signInButton != null) signInButton.interactable = !busy;
+        if (emailButton != null) emailButton.gameObject.SetActive(!signedIn);
     }
 
     void Update()
@@ -390,6 +449,9 @@ public sealed partial class FirebaseNavigationPackageLoader
         launchStatus = null;
         launchPrimary = null;
         launchPrimaryLabel = null;
+        signInButton = null;
+        signInLabel = null;
+        emailButton = null;
         renderedLibrary = null;
     }
 

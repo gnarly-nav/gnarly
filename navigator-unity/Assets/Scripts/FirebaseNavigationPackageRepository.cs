@@ -4,99 +4,63 @@ using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 using System.Collections.Generic;
-using System.Xml;
 using UnityEngine;
 using UnityEngine.Networking;
 
 /// <summary>
-/// Authenticated navigator client. List and package download go through the publish API,
-/// which checks the building ACL and returns short-lived signed URLs. Downloads are staged
-/// before the cache pointer moves, so the last complete package remains usable offline.
+/// Navigator client for the AWS publish API. List and package download use signed S3 URLs.
+/// A Cognito ID token is sent when the player is signed in. Anonymous reads are allowed.
+/// Downloads are staged before the cache pointer moves, so the last complete package stays usable offline.
+/// The type name is unchanged so existing scenes keep their script reference.
 /// </summary>
 public sealed class FirebaseNavigationPackageRepository
 {
-    const string ConfigFileName = "GoogleService-Info.plist";
-    readonly FirebaseNavigatorConfig config;
+    readonly AwsNavigatorConfig config;
     string idToken;
     string refreshToken;
     DateTime tokenExpiresAtUtc;
 
     public string UserId { get; private set; }
+    public string Email { get; private set; }
     public bool IsAuthenticated => !string.IsNullOrEmpty(idToken);
-    public bool HasSavedSession => FirebaseSessionStore.HasRefreshToken;
-    public static string ExpectedConfigPath => Path.Combine(Application.streamingAssetsPath, ConfigFileName);
+    public bool HasSavedSession => FirebaseSessionStore.HasRefreshToken || !string.IsNullOrEmpty(refreshToken);
 
-    public FirebaseNavigationPackageRepository(FirebaseNavigatorConfig config)
+    public FirebaseNavigationPackageRepository(AwsNavigatorConfig config)
     {
-        this.config = config;
+        this.config = config ?? AwsNavigatorConfig.Load();
     }
 
-    public static bool TryLoadConfig(out FirebaseNavigatorConfig result, out string error)
+    public Task SignInWithGoogleAsync() => SignInHostedAsync("Google");
+
+    public Task SignInWithEmailAsync() => SignInHostedAsync(null);
+
+    async Task SignInHostedAsync(string identityProvider)
     {
-        result = null;
-        error = null;
-        try
-        {
-            if (!File.Exists(ExpectedConfigPath))
-            {
-                error = $"Missing {ConfigFileName}. Run Gnarly > Configure Navigator Project before building.";
-                return false;
-            }
-
-            var document = new XmlDocument();
-            document.Load(ExpectedConfigPath);
-            var dictionary = document.SelectSingleNode("/plist/dict");
-            if (dictionary == null) throw new FormatException("Firebase plist has no dictionary.");
-            result = new FirebaseNavigatorConfig
-            {
-                apiKey = PlistString(dictionary, "API_KEY"),
-                projectId = PlistString(dictionary, "PROJECT_ID"),
-                storageBucket = PlistString(dictionary, "STORAGE_BUCKET"),
-                bundleId = PlistString(dictionary, "BUNDLE_ID")
-            };
-            result.Validate();
-            if (!string.Equals(result.bundleId, Application.identifier, StringComparison.Ordinal))
-                throw new FormatException(
-                    $"Firebase config bundle ID '{result.bundleId}' does not match navigator bundle ID " +
-                    $"'{Application.identifier}'. Register this navigator app in Firebase and download its plist.");
-            return true;
-        }
-        catch (Exception exception)
-        {
-            result = null;
-            error = $"Could not read Firebase configuration: {exception.Message}";
-            return false;
-        }
-    }
-
-    public async Task SignInAsync(string email, string password)
-    {
-        EnsureConfigured();
-        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrEmpty(password))
-            throw new ArgumentException("Enter the Firebase email and password.");
-
-        var body = JsonUtility.ToJson(new SignInRequest
-        {
-            email = email.Trim(),
-            password = password,
-            returnSecureToken = true
-        });
-        var url = $"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={Uri.EscapeDataString(config.apiKey)}";
-        var response = JsonUtility.FromJson<SignInResponse>(
-            await PostJsonAsync(url, body, "Firebase sign-in", config.bundleId));
-        if (response == null || string.IsNullOrEmpty(response.idToken) || string.IsNullOrEmpty(response.localId))
-            throw new FirebaseNavigationException("Firebase sign-in returned an incomplete response.");
-
-        idToken = response.idToken;
-        refreshToken = response.refreshToken;
-        UserId = response.localId;
-        tokenExpiresAtUtc = DateTime.UtcNow.AddSeconds(ParseLifetime(response.expiresIn));
-        FirebaseSessionStore.SaveRefreshToken(refreshToken);
+        var verifier = CognitoAuth.CodeVerifier();
+        var state = CognitoAuth.CodeVerifier();
+        var redirect = HostedRedirect();
+        var authorize = CognitoAuth.AuthorizeUrl(
+            config.cognitoDomain, config.clientId, redirect, CognitoAuth.CodeChallenge(verifier), state, identityProvider);
+        var callback = await CognitoAuth.WaitForRedirect(authorize, redirect);
+        var query = CognitoAuth.Query(callback);
+        if (query.TryGetValue("error_description", out var description) && !string.IsNullOrEmpty(description))
+            throw new FirebaseNavigationException(description);
+        if (query.TryGetValue("error", out var oauthError) && !string.IsNullOrEmpty(oauthError))
+            throw new FirebaseNavigationException(oauthError);
+        if (!query.TryGetValue("state", out var returnedState) || returnedState != state
+            || !query.TryGetValue("code", out var code) || string.IsNullOrEmpty(code))
+            throw new FirebaseNavigationException("Google sign-in could not be completed. Try again.");
+        var body = "grant_type=authorization_code"
+            + "&client_id=" + UnityWebRequest.EscapeURL(config.clientId)
+            + "&code=" + UnityWebRequest.EscapeURL(code)
+            + "&redirect_uri=" + UnityWebRequest.EscapeURL(redirect)
+            + "&code_verifier=" + UnityWebRequest.EscapeURL(verifier);
+        ApplyTokenResponse(JsonUtility.FromJson<CognitoTokenResponse>(
+            await PostFormAsync(CognitoAuth.TokenEndpoint(config.cognitoDomain), body, "Cognito sign-in")));
     }
 
     public async Task<bool> TryRestoreSessionAsync()
     {
-        EnsureConfigured();
         var savedRefreshToken = FirebaseSessionStore.LoadRefreshToken();
         if (string.IsNullOrEmpty(savedRefreshToken)) return false;
 
@@ -178,6 +142,11 @@ public sealed class FirebaseNavigationPackageRepository
                 File.Delete(colorJson);
                 if (File.Exists(colorAtlas)) File.Delete(colorAtlas);
             }
+            await TryDownloadSignedAsync(FindPackageFile(zone.files, "gaussian-splat.json"), Path.Combine(staging, "gaussian-splat.json"), "gaussian-splat.json");
+            await TryDownloadSignedAsync(FindPackageFile(zone.files, "gaussian-splat.spz"), Path.Combine(staging, "gaussian-splat.spz"), "gaussian-splat.spz");
+            await TryDownloadSignedAsync(FindPackageFile(zone.files, "gaussian-splat.ply"), Path.Combine(staging, "gaussian-splat.ply"), "gaussian-splat.ply");
+            await TryDownloadSignedAsync(FindPackageFile(zone.files, "gaussian-splat.splat"), Path.Combine(staging, "gaussian-splat.splat"), "gaussian-splat.splat");
+            await TryDownloadSignedAsync(FindPackageFile(zone.files, "textured-mesh.glb"), Path.Combine(staging, "textured-mesh.glb"), "textured-mesh.glb");
             File.WriteAllText(Path.Combine(staging, "package.json"), JsonUtility.ToJson(new CacheManifest
             {
                 buildingId = buildingId,
@@ -191,7 +160,7 @@ public sealed class FirebaseNavigationPackageRepository
             Directory.Move(staging, finalDirectory);
             WriteAtomically(LatestPointerPath(buildingId, zoneId),
                 JsonUtility.ToJson(new LatestPointer { versionId = versionId }));
-            Debug.Log($"[Gnarly] Cached Firebase package {buildingId}/{versionId}/{zoneId} at {finalDirectory}.");
+            Debug.Log($"[Gnarly] Cached map package {buildingId}/{versionId}/{zoneId} at {finalDirectory}.");
             return new DownloadedNavigationPackage(buildingId, versionId, zoneId, finalDirectory, false);
         }
         catch
@@ -257,70 +226,95 @@ public sealed class FirebaseNavigationPackageRepository
         }
         catch (Exception exception)
         {
-            Debug.LogWarning($"[Gnarly] Could not inspect Firebase cache: {exception.Message}");
+            Debug.LogWarning($"[Gnarly] Could not inspect the map cache: {exception.Message}");
         }
         return false;
     }
 
-    async Task EnsureFreshTokenAsync()
+    async Task AttachFreshTokenAsync()
     {
-        if (!IsAuthenticated)
-            throw new FirebaseNavigationException("Sign in before accessing Firestore or Storage.");
-        if (DateTime.UtcNow < tokenExpiresAtUtc.AddMinutes(-2)) return;
+        if (string.IsNullOrEmpty(idToken) && string.IsNullOrEmpty(refreshToken)) return;
+        if (!string.IsNullOrEmpty(idToken) && DateTime.UtcNow < tokenExpiresAtUtc.AddMinutes(-1)) return;
         if (string.IsNullOrEmpty(refreshToken))
-            throw new FirebaseNavigationException("The Firebase session expired. Sign in again.");
-
+        {
+            idToken = null;
+            return;
+        }
         await RefreshTokenAsync();
     }
 
     async Task RefreshTokenAsync()
     {
         if (string.IsNullOrEmpty(refreshToken))
-            throw new FirebaseNavigationException("The Firebase session expired. Sign in again.");
-        EnsureConfigured();
-        var url = $"https://securetoken.googleapis.com/v1/token?key={Uri.EscapeDataString(config.apiKey)}";
-        var form = "grant_type=refresh_token&refresh_token=" + UnityWebRequest.EscapeURL(refreshToken);
-        var response = JsonUtility.FromJson<RefreshResponse>(
-            await PostFormAsync(url, form, "Firebase session refresh", config.bundleId));
-        if (response == null || string.IsNullOrEmpty(response.id_token))
-            throw new FirebaseNavigationException("Firebase session refresh returned an incomplete response.");
+            throw new FirebaseNavigationException("The Cognito session expired. Sign in again.");
+        var form = "grant_type=refresh_token&client_id=" + UnityWebRequest.EscapeURL(config.clientId)
+            + "&refresh_token=" + UnityWebRequest.EscapeURL(refreshToken);
+        ApplyTokenResponse(JsonUtility.FromJson<CognitoTokenResponse>(
+            await PostFormAsync(CognitoAuth.TokenEndpoint(config.cognitoDomain), form, "Cognito session refresh")), keepRefresh: true);
+    }
 
+    void ApplyTokenResponse(CognitoTokenResponse response, bool keepRefresh = false)
+    {
+        if (response == null || string.IsNullOrEmpty(response.id_token))
+        {
+            var detail = response != null && !string.IsNullOrEmpty(response.error_description)
+                ? response.error_description
+                : "Cognito did not return an ID token.";
+            throw new FirebaseNavigationException(detail);
+        }
         idToken = response.id_token;
         if (!string.IsNullOrEmpty(response.refresh_token)) refreshToken = response.refresh_token;
-        if (!string.IsNullOrEmpty(response.user_id)) UserId = response.user_id;
-        tokenExpiresAtUtc = DateTime.UtcNow.AddSeconds(ParseLifetime(response.expires_in));
+        else if (!keepRefresh) { /* authorization-code responses include the refresh token */ }
+        var claims = ReadIdClaims(idToken);
+        if (!string.IsNullOrEmpty(claims.sub)) UserId = claims.sub;
+        Email = claims.email ?? "";
+        var lifetime = response.expires_in > 0 ? response.expires_in : 3600;
+        tokenExpiresAtUtc = DateTime.UtcNow.AddSeconds(Math.Max(60, lifetime));
         FirebaseSessionStore.SaveRefreshToken(refreshToken);
+    }
+
+    static IdClaims ReadIdClaims(string jwt)
+    {
+        try
+        {
+            var parts = jwt.Split('.');
+            if (parts.Length < 2) return new IdClaims();
+            var payload = parts[1].Replace('-', '+').Replace('_', '/');
+            switch (payload.Length % 4)
+            {
+                case 2: payload += "=="; break;
+                case 3: payload += "="; break;
+            }
+            return JsonUtility.FromJson<IdClaims>(Encoding.UTF8.GetString(Convert.FromBase64String(payload))) ?? new IdClaims();
+        }
+        catch
+        {
+            return new IdClaims();
+        }
     }
 
     async Task<string> ApiGetAsync(string path, string operation)
     {
-        await EnsureFreshTokenAsync();
+        try { await AttachFreshTokenAsync(); }
+        catch (Exception exception)
+        {
+            Debug.LogWarning($"[Gnarly] Cognito session was dropped: {exception.Message}");
+            ForgetSavedSession();
+        }
         using var request = UnityWebRequest.Get(ApiBaseUrl() + path);
-        request.SetRequestHeader("Authorization", "Bearer " + idToken);
+        if (!string.IsNullOrEmpty(idToken)) request.SetRequestHeader("Authorization", "Bearer " + idToken);
         return await SendForTextAsync(request, operation);
     }
 
-    string _apiBaseUrl;
+    string ApiBaseUrl() => (string.IsNullOrWhiteSpace(config.apiBase) ? CognitoAuth.DefaultApiBase : config.apiBase).TrimEnd('/');
 
-    string ApiBaseUrl()
+    string HostedRedirect()
     {
-        if (!string.IsNullOrEmpty(_apiBaseUrl)) return _apiBaseUrl;
-        var asset = Resources.Load<TextAsset>("gnarly-api-base");
-        var text = asset == null ? "" : asset.text;
-        foreach (var raw in text.Split('\n'))
-        {
-            var line = raw.Trim();
-            if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
-            if (!line.StartsWith("https://", StringComparison.Ordinal) &&
-                !line.StartsWith("http://127.0.0.1", StringComparison.Ordinal) &&
-                !line.StartsWith("http://localhost", StringComparison.Ordinal))
-                break;
-            _apiBaseUrl = line.TrimEnd('/');
-            return _apiBaseUrl;
-        }
-        throw new FirebaseNavigationException(
-            "Set the publish API origin in Assets/Resources/gnarly-api-base.txt. " +
-            "Use the Cloud Run, Functions, or API Gateway URL, with no trailing slash.");
+#if UNITY_IOS && !UNITY_EDITOR
+        return string.IsNullOrWhiteSpace(config.deviceRedirectUri) ? CognitoAuth.DeviceRedirectUri : config.deviceRedirectUri;
+#else
+        return CognitoAuth.EditorRedirectUri;
+#endif
     }
 
     static PackageFile FindPackageFile(PackageFile[] files, string name)
@@ -358,19 +352,7 @@ public sealed class FirebaseNavigationPackageRepository
         }
     }
 
-    static async Task<string> PostJsonAsync(string url, string body, string operation, string bundleId)
-    {
-        using var request = new UnityWebRequest(url, UnityWebRequest.kHttpVerbPOST)
-        {
-            uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body)),
-            downloadHandler = new DownloadHandlerBuffer()
-        };
-        request.SetRequestHeader("Content-Type", "application/json");
-        request.SetRequestHeader("X-Ios-Bundle-Identifier", bundleId);
-        return await SendForTextAsync(request, operation);
-    }
-
-    static async Task<string> PostFormAsync(string url, string body, string operation, string bundleId)
+    static async Task<string> PostFormAsync(string url, string body, string operation)
     {
         using var request = new UnityWebRequest(url, UnityWebRequest.kHttpVerbPOST)
         {
@@ -378,7 +360,6 @@ public sealed class FirebaseNavigationPackageRepository
             downloadHandler = new DownloadHandlerBuffer()
         };
         request.SetRequestHeader("Content-Type", "application/x-www-form-urlencoded");
-        request.SetRequestHeader("X-Ios-Bundle-Identifier", bundleId);
         return await SendForTextAsync(request, operation);
     }
 
@@ -492,21 +473,6 @@ public sealed class FirebaseNavigationPackageRepository
                 throw new ArgumentException($"{field} cannot contain '/', '\\', or control characters.");
     }
 
-    public async Task SignInAnonymouslyAsync()
-    {
-        EnsureConfigured();
-        var url = $"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={Uri.EscapeDataString(config.apiKey)}";
-        var response = JsonUtility.FromJson<SignInResponse>(
-            await PostJsonAsync(url, "{\"returnSecureToken\":true}", "Firebase anonymous access", config.bundleId));
-        if (response == null || string.IsNullOrEmpty(response.idToken) || string.IsNullOrEmpty(response.localId))
-            throw new FirebaseNavigationException("Firebase anonymous access returned an incomplete response.");
-        idToken = response.idToken;
-        refreshToken = response.refreshToken;
-        UserId = response.localId;
-        tokenExpiresAtUtc = DateTime.UtcNow.AddSeconds(ParseLifetime(response.expiresIn));
-        FirebaseSessionStore.SaveRefreshToken(refreshToken);
-    }
-
     public List<DownloadedNavigationPackage> ListCachedPackages()
     {
         var result = new List<DownloadedNavigationPackage>();
@@ -518,17 +484,6 @@ public sealed class FirebaseNavigationPackageRepository
                     result.Add(package);
         return result;
     }
-
-    void EnsureConfigured()
-    {
-        if (config == null)
-            throw new FirebaseNavigationException($"Firebase is not configured. Add {ConfigFileName} to Assets/StreamingAssets.");
-    }
-
-    static long ParseLifetime(string value) =>
-        long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds)
-            ? Math.Max(60, seconds)
-            : 3600;
 
     static string PackageRoot(string buildingId, string zoneId) =>
         Path.Combine(Application.persistentDataPath, "navigation-cache", buildingId, zoneId);
@@ -545,39 +500,19 @@ public sealed class FirebaseNavigationPackageRepository
         File.Move(temporary, path);
     }
 
-    static string PlistString(XmlNode dictionary, string wantedKey)
-    {
-        for (var node = dictionary.FirstChild; node != null; node = node.NextSibling)
-        {
-            if (node.NodeType != XmlNodeType.Element || node.Name != "key" || node.InnerText != wantedKey) continue;
-            var value = node.NextSibling;
-            while (value != null && value.NodeType != XmlNodeType.Element) value = value.NextSibling;
-            return value?.InnerText;
-        }
-        return null;
-    }
-
-    [Serializable] sealed class SignInRequest
-    {
-        public string email;
-        public string password;
-        public bool returnSecureToken;
-    }
-
-    [Serializable] sealed class SignInResponse
-    {
-        public string idToken;
-        public string refreshToken;
-        public string expiresIn;
-        public string localId;
-    }
-
-    [Serializable] sealed class RefreshResponse
+    [Serializable] sealed class CognitoTokenResponse
     {
         public string id_token;
-        public string expires_in;
+        public string access_token;
         public string refresh_token;
-        public string user_id;
+        public int expires_in;
+        public string error_description;
+    }
+
+    [Serializable] sealed class IdClaims
+    {
+        public string sub;
+        public string email;
     }
 
     [Serializable] sealed class LibraryResponse { public LibraryBuilding[] buildings; }
@@ -639,20 +574,48 @@ public sealed class FirebaseNavigationPackageRepository
     }
 }
 
-[Serializable]
-public sealed class FirebaseNavigatorConfig
+/// <summary>Publish API and Cognito settings. Defaults match the live AWS account. Override in Resources.</summary>
+public sealed class AwsNavigatorConfig
 {
-    public string apiKey;
-    public string projectId;
-    public string storageBucket;
-    public string bundleId;
+    public string apiBase = CognitoAuth.DefaultApiBase;
+    public string cognitoDomain = CognitoAuth.DefaultDomain;
+    public string clientId = CognitoAuth.DefaultClientId;
+    public string userPoolId = CognitoAuth.DefaultPoolId;
+    public string deviceRedirectUri = CognitoAuth.DeviceRedirectUri;
 
-    public void Validate()
+    public static AwsNavigatorConfig Load()
     {
-        if (string.IsNullOrWhiteSpace(apiKey)) throw new FormatException("API_KEY is missing.");
-        if (string.IsNullOrWhiteSpace(projectId)) throw new FormatException("PROJECT_ID is missing.");
-        if (string.IsNullOrWhiteSpace(storageBucket)) throw new FormatException("STORAGE_BUCKET is missing.");
-        if (string.IsNullOrWhiteSpace(bundleId)) throw new FormatException("BUNDLE_ID is missing.");
+        var config = new AwsNavigatorConfig();
+        Apply(config, Resources.Load<TextAsset>("gnarly-aws"));
+        Apply(config, Resources.Load<TextAsset>("gnarly-api-base"));
+        return config;
+    }
+
+    static void Apply(AwsNavigatorConfig config, TextAsset asset)
+    {
+        if (asset == null || string.IsNullOrEmpty(asset.text)) return;
+        foreach (var raw in asset.text.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
+            var cut = line.IndexOf('=');
+            if (cut > 0)
+            {
+                var key = line.Substring(0, cut).Trim();
+                var value = line.Substring(cut + 1).Trim();
+                if (value.Length == 0) continue;
+                if (key == "apiBase") config.apiBase = value;
+                else if (key == "cognitoDomain") config.cognitoDomain = value;
+                else if (key == "cognitoClientId") config.clientId = value;
+                else if (key == "cognitoUserPoolId") config.userPoolId = value;
+                else if (key == "cognitoRedirectUri") config.deviceRedirectUri = value;
+                continue;
+            }
+            if (line.StartsWith("https://", StringComparison.Ordinal) ||
+                line.StartsWith("http://127.0.0.1", StringComparison.Ordinal) ||
+                line.StartsWith("http://localhost", StringComparison.Ordinal))
+                config.apiBase = line;
+        }
     }
 }
 

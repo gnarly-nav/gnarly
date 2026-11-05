@@ -112,12 +112,37 @@ This repo does not change the user pool. Google sign-in works after the Google I
 
 ## Other clients
 
-The mapper and Navigator still obtain Firebase ID tokens. Against this API:
+The mapper and the Navigator use this API and Cognito. They do not call DynamoDB or S3 themselves, and they do not send Firebase tokens.
 
-- downloads work with no token
-- publish and other writes need a Cognito ID token for `nj277@cornell.edu`
+Both reuse the existing public app client (`1osnrt38iuqvf5laum1tnj1hdn`). Its ID tokens already pass `COGNITO_CLIENT_ID`. A second app client is not required: Google sign-in is the hosted UI with PKCE, and the redirect URLs already registered on that client are enough.
 
-Those apps were not switched to Cognito.
+- iOS (mapper and Navigator) uses `https://naijei.com/gnarly/`. `ASWebAuthenticationSession` on iOS 17.4 intercepts that https callback, so no custom URL scheme and no extra Google iOS client ID are added.
+- The Unity Editor uses `http://localhost:5173/`. Quit anything else listening on that port (often `npm run dev`) before signing in from the Editor.
+- Navigator map list and download work with no token. When a Cognito session exists, the ID token is sent. Publish, placement, and layout edits from the mapper require the verified admin email.
+
+No Google client ID is stored in the apps. Google is an identity provider on the user pool, not a separate mobile OAuth client.
+
+Mapper keys in `mapper-ios/GnarlyMapper/Info.plist` (defaults match the live account when a value is empty):
+
+| Key | Value |
+| --- | --- |
+| `GnarlyApiBaseURL` | Lambda Function URL |
+| `CognitoUserPoolId` | `us-east-1_pQIUmVbPJ` |
+| `CognitoClientId` | `1osnrt38iuqvf5laum1tnj1hdn` |
+| `CognitoDomain` | `gnarly-naijei.auth.us-east-1.amazoncognito.com` |
+| `CognitoRedirectURI` | `https://naijei.com/gnarly/` |
+
+Navigator keys, in `navigator-unity/Assets/Resources/gnarly-api-base.txt` (a bare URL) and optional `gnarly-aws.txt`:
+
+| Key | Value |
+| --- | --- |
+| bare URL or `apiBase` | Lambda Function URL |
+| `cognitoDomain` | hosted domain, host only |
+| `cognitoClientId` | `1osnrt38iuqvf5laum1tnj1hdn` |
+| `cognitoUserPoolId` | `us-east-1_pQIUmVbPJ` |
+| `cognitoRedirectUri` | iOS callback only. The Editor stays on `http://localhost:5173/` |
+
+The Navigator iOS target is 17.4 so the https callback is available. The Firebase Apple / Unity SDK is not on the runtime path. Script type names that still say Firebase are kept so existing Unity scenes do not lose their references. The API process can still select `GNARLY_BACKEND=firebase`; these clients always speak the HTTP API and Cognito.
 
 ## Checks
 

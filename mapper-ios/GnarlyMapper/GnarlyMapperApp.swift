@@ -2,12 +2,7 @@ import SwiftUI
 
 @main
 struct GnarlyMapperApp: App {
-    @StateObject private var authSession: FirebaseAuthSession
-
-    init() {
-        FirebaseBootstrap.configureIfPossible()
-        _authSession = StateObject(wrappedValue: FirebaseAuthSession())
-    }
+    @StateObject private var authSession = CognitoSession.shared
 
     var body: some Scene {
         WindowGroup {

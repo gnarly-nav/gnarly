@@ -3,7 +3,7 @@ import Security
 import Darwin
 
 private enum FirebaseSessionKeychain {
-    static let service = "com.gnarly.navigator.firebase"
+    static let service = "com.gnarly.navigator.cognito"
     static let account = "refresh-token"
 
     static var query: [CFString: Any] {
