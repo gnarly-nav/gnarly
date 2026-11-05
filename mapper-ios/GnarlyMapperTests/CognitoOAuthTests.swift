@@ -68,4 +68,39 @@ final class CognitoOAuthTests: XCTestCase {
     func testLiveAPIDefaultsToAWSWhenThePlistIsEmpty() throws {
         XCTAssertEqual(try GnarlyApiConfig.url(from: CognitoOAuth.defaultAPIBase).host, "m7sgp6qsjkimymyrwa6bilxqzq0acbhx.lambda-url.us-east-1.on.aws")
     }
+
+    func testPasswordChallengeMatchesTheWebsiteClient() throws {
+        XCTAssertEqual(CognitoSrp.poolName(CognitoOAuth.defaultUserPoolID), "pQIUmVbPJ")
+        XCTAssertEqual(CognitoSrp.region(CognitoOAuth.defaultUserPoolID), "us-east-1")
+        XCTAssertEqual(try CognitoSrp.publicValue(secretHex: "1"), "2")
+        XCTAssertEqual(try CognitoSrp.publicValue(secretHex: "02"), "4")
+        XCTAssertEqual(CognitoSrp.padHex(BigUInt(limbs: [20])), "14")
+        XCTAssertEqual(CognitoSrp.padHex(BigUInt(limbs: [236])), "00ec")
+        let secret = String(repeating: "11", count: 32)
+        let clientA = try CognitoSrp.publicValue(secretHex: secret)
+        XCTAssertEqual(clientA, "f2c4e7407ccfac452a7c7e1034e8388bf70b3aea30007fd146ae4c54b341d252f7752a43f24cd28368a96f455f9ee00eb4312863c2560b7162587cd2c962b588cae47a9ac339433f9fc7d3563c1abb952acc1e3dd565fc9ecde1ac7cc593627494abc14dbb2410bc3dc4a0cf5e6f2f7af643f1d2c888180b50375a28902031b3c7052284d5d32b9dd8ee35c6c0cb9ee52288bcbc52deb224c55391da65ec10e66f8c41cc7d0c12b7a75f171ada3cb4c21fba22c4ad59ad4685cd63080d92d959cc54fcda8022cb856ce27c6e2ae2c81f6f9fa8cad13cfb22dc202b650e14014498bf3afd56c95a8cf956c46e3aedb2f20b4d1d8ebf2e9ef26955e228142b1168b1bfd7383d403ccbb00d89ca6843e39b7a44d7741a063bd4edb9c054606f59c7416327aa574b2f6d910606d9677c5018d07e080cd342ac446d35fd481f7818c780deb9508aeba3483493e43c98c6885e09883b8feb7e903e16468e7a1fc3df0cc55c71d1b3e4b4574d40699be76bca7abdf7938cfb2068cacca3b49b35a49099")
+        let key = try CognitoSrp.authenticationKey(
+            poolName: "pQIUmVbPJ",
+            username: "nj277@cornell.edu",
+            password: "hunter2",
+            secretHex: secret,
+            srpBHex: String(repeating: "2", count: 64),
+            saltHex: String(repeating: "ab", count: 16)
+        )
+        XCTAssertEqual(key.map { String(format: "%02x", $0) }.joined(), "520fc9074ea5352b6636ae9fedd712f1")
+        XCTAssertEqual(
+            try CognitoSrp.claimSignature(
+                key: key,
+                poolName: "pQIUmVbPJ",
+                username: "nj277@cornell.edu",
+                secretBlock: Data("secret-block".utf8).base64EncodedString(),
+                timestamp: "Thu Nov 5 5:04:00 UTC 2026"
+            ),
+            "JImSfFkTaU6ipA2dMkuPcb3vCT5eSst/JKzuFe3acX8="
+        )
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = calendar.date(from: DateComponents(year: 2026, month: 11, day: 5, hour: 5, minute: 4, second: 0))!
+        XCTAssertEqual(CognitoSrp.timestamp(date), "Thu Nov 5 05:04:00 UTC 2026")
+    }
 }

@@ -32,7 +32,62 @@ public sealed class FirebaseNavigationPackageRepository
 
     public Task SignInWithGoogleAsync() => SignInHostedAsync("Google");
 
-    public Task SignInWithEmailAsync() => SignInHostedAsync(null);
+    public async Task SignInWithPasswordAsync(string email, string password)
+    {
+        var username = (email ?? "").Trim();
+        if (username.Length == 0 || string.IsNullOrEmpty(password))
+            throw new FirebaseNavigationException("Enter the email and password for this Cognito account.");
+        var poolName = CognitoSrp.PoolName(config.userPoolId);
+        var region = CognitoSrp.Region(config.userPoolId);
+        if (poolName == null || region == null)
+            throw new FirebaseNavigationException("The Cognito user pool id is invalid.");
+        var secret = CognitoSrp.RandomSecret();
+        var srpA = CognitoSrp.PublicValue(secret);
+        var started = JsonUtility.FromJson<SrpStart>(await PostCognitoAsync("InitiateAuth",
+            "{\"AuthFlow\":\"USER_SRP_AUTH\",\"ClientId\":" + CognitoSrp.JsonString(config.clientId)
+            + ",\"AuthParameters\":{\"USERNAME\":" + CognitoSrp.JsonString(username)
+            + ",\"SRP_A\":" + CognitoSrp.JsonString(srpA) + "}}"));
+        if (started == null) throw new FirebaseNavigationException("Cognito did not return a password challenge.");
+        if (!string.IsNullOrEmpty(started.ChallengeName) && started.ChallengeName != "PASSWORD_VERIFIER")
+            throw new FirebaseNavigationException(ChallengeMessage(started.ChallengeName));
+        var parameters = started.ChallengeParameters;
+        if (parameters == null || string.IsNullOrEmpty(parameters.USER_ID_FOR_SRP) || string.IsNullOrEmpty(parameters.SRP_B)
+            || string.IsNullOrEmpty(parameters.SALT) || string.IsNullOrEmpty(parameters.SECRET_BLOCK))
+            throw new FirebaseNavigationException("Cognito did not return a password challenge.");
+        var key = CognitoSrp.AuthenticationKey(poolName, parameters.USER_ID_FOR_SRP, password, secret, parameters.SRP_B, parameters.SALT);
+        var stamp = CognitoSrp.Timestamp(DateTime.UtcNow);
+        var signature = CognitoSrp.ClaimSignature(key, poolName, parameters.USER_ID_FOR_SRP, parameters.SECRET_BLOCK, stamp);
+        var body = "{\"ChallengeName\":\"PASSWORD_VERIFIER\",\"ClientId\":" + CognitoSrp.JsonString(config.clientId)
+            + ",\"ChallengeResponses\":{\"USERNAME\":" + CognitoSrp.JsonString(parameters.USER_ID_FOR_SRP)
+            + ",\"PASSWORD_CLAIM_SECRET_BLOCK\":" + CognitoSrp.JsonString(parameters.SECRET_BLOCK)
+            + ",\"TIMESTAMP\":" + CognitoSrp.JsonString(stamp)
+            + ",\"PASSWORD_CLAIM_SIGNATURE\":" + CognitoSrp.JsonString(signature) + "}";
+        if (!string.IsNullOrEmpty(started.Session)) body += ",\"Session\":" + CognitoSrp.JsonString(started.Session);
+        body += "}";
+        var finished = JsonUtility.FromJson<SrpStart>(await PostCognitoAsync("RespondToAuthChallenge", body));
+        if (finished == null) throw new FirebaseNavigationException("Cognito did not return tokens.");
+        if (!string.IsNullOrEmpty(finished.ChallengeName))
+            throw new FirebaseNavigationException(ChallengeMessage(finished.ChallengeName));
+        var result = finished.AuthenticationResult;
+        if (result == null || string.IsNullOrEmpty(result.IdToken))
+            throw new FirebaseNavigationException("Cognito did not return tokens.");
+        ApplyTokenResponse(new CognitoTokenResponse
+        {
+            id_token = result.IdToken,
+            access_token = result.AccessToken,
+            refresh_token = result.RefreshToken,
+            expires_in = result.ExpiresIn
+        });
+    }
+
+    static string ChallengeMessage(string name)
+    {
+        if (name == "NEW_PASSWORD_REQUIRED")
+            return "This account still has a temporary Cognito password. Set a permanent password in the user pool, then sign in again. This app does not create users.";
+        if (name == "SMS_MFA" || name == "SOFTWARE_TOKEN_MFA")
+            return "This account requires MFA, which this form does not complete.";
+        return "Cognito asked for " + name + ", which this form does not complete.";
+    }
 
     async Task SignInHostedAsync(string identityProvider)
     {
@@ -73,9 +128,15 @@ public sealed class FirebaseNavigationPackageRepository
             await RefreshTokenAsync();
             return true;
         }
+        catch (FirebaseNavigationException exception)
+        {
+            if (IsRejectedSession(exception)) ForgetSavedSession();
+            else idToken = null;
+            return false;
+        }
         catch
         {
-            ForgetSavedSession();
+            idToken = null;
             return false;
         }
     }
@@ -298,8 +359,9 @@ public sealed class FirebaseNavigationPackageRepository
         try { await AttachFreshTokenAsync(); }
         catch (Exception exception)
         {
-            Debug.LogWarning($"[Gnarly] Cognito session was dropped: {exception.Message}");
-            ForgetSavedSession();
+            Debug.LogWarning($"[Gnarly] Cognito session was not attached: {exception.Message}");
+            if (exception is FirebaseNavigationException navigation && IsRejectedSession(navigation)) ForgetSavedSession();
+            else idToken = null;
         }
         using var request = UnityWebRequest.Get(ApiBaseUrl() + path);
         if (!string.IsNullOrEmpty(idToken)) request.SetRequestHeader("Authorization", "Bearer " + idToken);
@@ -352,6 +414,19 @@ public sealed class FirebaseNavigationPackageRepository
         }
     }
 
+    async Task<string> PostCognitoAsync(string target, string body)
+    {
+        var region = CognitoSrp.Region(config.userPoolId);
+        using var request = new UnityWebRequest("https://cognito-idp." + region + ".amazonaws.com/", UnityWebRequest.kHttpVerbPOST)
+        {
+            uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body)),
+            downloadHandler = new DownloadHandlerBuffer()
+        };
+        request.SetRequestHeader("Content-Type", "application/x-amz-json-1.1");
+        request.SetRequestHeader("X-Amz-Target", "AWSCognitoIdentityProviderService." + target);
+        return await SendForTextAsync(request, "Cognito " + target);
+    }
+
     static async Task<string> PostFormAsync(string url, string body, string operation)
     {
         using var request = new UnityWebRequest(url, UnityWebRequest.kHttpVerbPOST)
@@ -385,11 +460,20 @@ public sealed class FirebaseNavigationPackageRepository
         throw new FirebaseNavigationException($"{operation} failed ({request.responseCode}): {detail}");
     }
 
+    static bool IsRejectedSession(FirebaseNavigationException exception)
+    {
+        var message = exception.Message ?? "";
+        return message.Contains("(400)") || message.Contains("(401)");
+    }
+
     static string ExtractFirebaseError(string body)
     {
         if (string.IsNullOrEmpty(body)) return null;
         try
         {
+            var cognito = JsonUtility.FromJson<CognitoErrorBody>(body);
+            if (!string.IsNullOrEmpty(cognito?.error_description)) return cognito.error_description;
+            if (!string.IsNullOrEmpty(cognito?.message)) return cognito.message;
             return JsonUtility.FromJson<FirebaseErrorEnvelope>(body)?.error?.message;
         }
         catch
@@ -498,6 +582,36 @@ public sealed class FirebaseNavigationPackageRepository
         File.WriteAllText(temporary, contents);
         if (File.Exists(path)) File.Delete(path);
         File.Move(temporary, path);
+    }
+
+    [Serializable] sealed class SrpStart
+    {
+        public string ChallengeName;
+        public string Session;
+        public SrpParameters ChallengeParameters;
+        public SrpResult AuthenticationResult;
+    }
+
+    [Serializable] sealed class SrpParameters
+    {
+        public string USER_ID_FOR_SRP;
+        public string SRP_B;
+        public string SALT;
+        public string SECRET_BLOCK;
+    }
+
+    [Serializable] sealed class SrpResult
+    {
+        public string IdToken;
+        public string AccessToken;
+        public string RefreshToken;
+        public int ExpiresIn;
+    }
+
+    [Serializable] sealed class CognitoErrorBody
+    {
+        public string error_description;
+        public string message;
     }
 
     [Serializable] sealed class CognitoTokenResponse

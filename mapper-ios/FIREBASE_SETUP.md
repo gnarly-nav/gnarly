@@ -23,7 +23,7 @@ No `GoogleService-Info.plist` and no separate Google iOS client ID. Google is th
 ## Sign-in and access
 
 1. Run the mapper on an iPhone with iOS 17.4 or later. RoomPlan still needs a LiDAR device; the simulator can compile but cannot scan.
-2. Tap **Sign in with Google**, or **Sign in with email** for the Cognito hosted login page. The app does not create accounts.
+2. Tap **Sign in with Google**, or enter the email and password for an existing Cognito user. Google opens the hosted UI. Email uses the `USER_SRP_AUTH` challenge, the same one as the website, and does not create an account.
 3. The ID token is stored in the Keychain and sent as `Authorization: Bearer` on API calls. The access token is not sent. It has no email claim.
 4. Anyone signed in can list and open maps. Publish, placement, and layout saves succeed only for a verified address in `ADMIN_EMAILS` (default `nj277@cornell.edu`). Another account gets HTTP 403 from the API.
 

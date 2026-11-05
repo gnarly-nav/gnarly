@@ -3,8 +3,9 @@ import Foundation
 import Security
 import UIKit
 
-/// Cognito session for the mapper. Google and email both use the hosted UI with PKCE,
-/// the same public app client as the website, and the ID token on publish API calls.
+/// Cognito session for the mapper. Google uses the hosted UI with PKCE.
+/// Email and password use the same USER_SRP_AUTH challenge as the website.
+/// API calls send the ID token. This app does not create accounts.
 @MainActor
 final class CognitoSession: ObservableObject {
     static let shared = CognitoSession()
@@ -38,8 +39,25 @@ final class CognitoSession: ObservableObject {
     }
 
     @discardableResult
-    func signInWithEmail() async -> Bool {
-        await signIn(identityProvider: nil)
+    func signInWithEmail(_ emailAddress: String, password: String) async -> Bool {
+        isWorking = true
+        errorMessage = nil
+        defer { isWorking = false }
+        let username = emailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !username.isEmpty, !password.isEmpty else {
+            errorMessage = "Enter the email and password for this Cognito account."
+            return false
+        }
+        do {
+            try await runPasswordSignIn(username: username, password: password)
+            return true
+        } catch let error as CognitoAuthError {
+            errorMessage = error.message
+            return false
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
     }
 
     func signOut() {
@@ -47,11 +65,7 @@ final class CognitoSession: ObservableObject {
         refreshTask = nil
         webSession?.cancel()
         webSession = nil
-        tokens = nil
-        CognitoKeychain.clear()
-        userUID = nil
-        email = nil
-        emailVerified = false
+        clearSession()
         errorMessage = nil
     }
 
@@ -135,10 +149,8 @@ final class CognitoSession: ObservableObject {
 
     private func refreshIfStale() async {
         guard tokens != nil, freshIDToken() == nil else { return }
-        do { _ = try await requireIdToken() }
-        catch {
-            signOut()
-        }
+        // A rejected refresh token clears the session inside refresh(). A network failure leaves it for the next try.
+        try? await requireIdToken()
     }
 
     private func freshIDToken() -> String? {
@@ -157,9 +169,113 @@ final class CognitoSession: ObservableObject {
             let next = try await requestTokens(body: body, fallbackRefresh: tokens.refreshToken)
             store(next)
             return next.idToken
-        } catch {
-            signOut()
+        } catch is CognitoAuthError {
+            clearSession()
             throw PackagePublishError("Sign in again.")
+        } catch {
+            throw PackagePublishError("The Cognito session could not be refreshed. Check the connection and try again.")
+        }
+    }
+
+    private func clearSession() {
+        tokens = nil
+        CognitoKeychain.clear()
+        userUID = nil
+        email = nil
+        emailVerified = false
+    }
+
+    private func runPasswordSignIn(username: String, password: String) async throws {
+        let config = GnarlyAwsConfig.current
+        guard let poolName = CognitoSrp.poolName(config.userPoolID),
+              let region = CognitoSrp.region(config.userPoolID),
+              let endpoint = URL(string: "https://cognito-idp.\(region).amazonaws.com/") else {
+            throw CognitoAuthError("The Cognito user pool id is invalid.")
+        }
+        let secret = try CognitoSrp.randomSecret()
+        let srpA = try CognitoSrp.publicValue(secretHex: secret)
+        let started = try await cognitoCall(endpoint, target: "InitiateAuth", body: [
+            "AuthFlow": "USER_SRP_AUTH",
+            "ClientId": config.clientID,
+            "AuthParameters": ["USERNAME": username, "SRP_A": srpA],
+        ])
+        if let challenge = started["ChallengeName"] as? String, challenge != "PASSWORD_VERIFIER" {
+            throw CognitoAuthError(Self.challengeMessage(challenge))
+        }
+        guard let parameters = started["ChallengeParameters"] as? [String: Any],
+              let user = parameters["USER_ID_FOR_SRP"] as? String, !user.isEmpty,
+              let serverB = parameters["SRP_B"] as? String, !serverB.isEmpty,
+              let salt = parameters["SALT"] as? String, !salt.isEmpty,
+              let block = parameters["SECRET_BLOCK"] as? String, !block.isEmpty else {
+            throw CognitoAuthError("Cognito did not return a password challenge.")
+        }
+        let key = try CognitoSrp.authenticationKey(
+            poolName: poolName,
+            username: user,
+            password: password,
+            secretHex: secret,
+            srpBHex: serverB,
+            saltHex: salt
+        )
+        let stamp = CognitoSrp.timestamp()
+        let signature = try CognitoSrp.claimSignature(
+            key: key, poolName: poolName, username: user, secretBlock: block, timestamp: stamp
+        )
+        var body: [String: Any] = [
+            "ChallengeName": "PASSWORD_VERIFIER",
+            "ClientId": config.clientID,
+            "ChallengeResponses": [
+                "USERNAME": user,
+                "PASSWORD_CLAIM_SECRET_BLOCK": block,
+                "TIMESTAMP": stamp,
+                "PASSWORD_CLAIM_SIGNATURE": signature,
+            ],
+        ]
+        if let session = started["Session"] as? String, !session.isEmpty { body["Session"] = session }
+        let finished = try await cognitoCall(endpoint, target: "RespondToAuthChallenge", body: body)
+        if let challenge = finished["ChallengeName"] as? String, !challenge.isEmpty {
+            throw CognitoAuthError(Self.challengeMessage(challenge))
+        }
+        guard let result = finished["AuthenticationResult"] as? [String: Any],
+              let idToken = result["IdToken"] as? String, !idToken.isEmpty,
+              let accessToken = result["AccessToken"] as? String, !accessToken.isEmpty else {
+            throw CognitoAuthError("Cognito did not return tokens.")
+        }
+        let refresh = (result["RefreshToken"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? ""
+        let expiresIn = (result["ExpiresIn"] as? NSNumber)?.doubleValue ?? (result["ExpiresIn"] as? Double) ?? 3600
+        store(StoredTokens(
+            idToken: idToken,
+            accessToken: accessToken,
+            refreshToken: refresh,
+            expiresAt: Date().addingTimeInterval(expiresIn)
+        ))
+    }
+
+    private func cognitoCall(_ endpoint: URL, target: String, body: [String: Any]) async throws -> [String: Any] {
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("application/x-amz-json-1.1", forHTTPHeaderField: "Content-Type")
+        request.setValue("AWSCognitoIdentityProviderService.\(target)", forHTTPHeaderField: "X-Amz-Target")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status) else {
+            let message = (json["message"] as? String) ?? (json["__type"] as? String) ?? "Cognito rejected the password sign-in."
+            throw CognitoAuthError(message)
+        }
+        return json
+    }
+
+    private static func challengeMessage(_ name: String) -> String {
+        switch name {
+        case "NEW_PASSWORD_REQUIRED":
+            return "This account still has a temporary Cognito password. Set a permanent password in the user pool, then sign in again. This app does not create users."
+        case "SMS_MFA", "SOFTWARE_TOKEN_MFA":
+            return "This account requires MFA, which this form does not complete."
+        default:
+            return "Cognito asked for \(name), which this form does not complete."
         }
     }
 

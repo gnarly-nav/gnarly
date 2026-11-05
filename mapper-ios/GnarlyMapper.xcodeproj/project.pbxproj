@@ -49,6 +49,7 @@
 		9D4F2A6C1E85B0374C2D9A18 /* GnarlyApiConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B8E1C4A9D703F26E1A4C8B0 /* GnarlyApiConfigTests.swift */; };
 		A7C0A11E5F60718293A4C102 /* CognitoOAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C0A11E5F60718293A4C101 /* CognitoOAuth.swift */; };
 		A7C0A11E5F60718293A4C104 /* CognitoSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C0A11E5F60718293A4C103 /* CognitoSession.swift */; };
+		A7C0A11E5F60718293A4C108 /* CognitoSrp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C0A11E5F60718293A4C107 /* CognitoSrp.swift */; };
 		A7C0A11E5F60718293A4C106 /* CognitoOAuthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C0A11E5F60718293A4C105 /* CognitoOAuthTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -109,6 +110,7 @@
 		A1B2C3D4E5F60718293A4B71 /* BuildingModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildingModelsTests.swift; sourceTree = "<group>"; };
 		A7C0A11E5F60718293A4C101 /* CognitoOAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CognitoOAuth.swift; sourceTree = "<group>"; };
 		A7C0A11E5F60718293A4C103 /* CognitoSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CognitoSession.swift; sourceTree = "<group>"; };
+		A7C0A11E5F60718293A4C107 /* CognitoSrp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CognitoSrp.swift; sourceTree = "<group>"; };
 		A7C0A11E5F60718293A4C105 /* CognitoOAuthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CognitoOAuthTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -208,6 +210,7 @@
 				A1B2C3D4E5F60718293A4B11 /* AuthView.swift */,
 				A7C0A11E5F60718293A4C101 /* CognitoOAuth.swift */,
 				A7C0A11E5F60718293A4C103 /* CognitoSession.swift */,
+				A7C0A11E5F60718293A4C107 /* CognitoSrp.swift */,
 			);
 			path = Auth;
 			sourceTree = "<group>";
@@ -352,6 +355,7 @@
 				A1B2C3D4E5F60718293A4B12 /* AuthView.swift in Sources */,
 				A7C0A11E5F60718293A4C102 /* CognitoOAuth.swift in Sources */,
 				A7C0A11E5F60718293A4C104 /* CognitoSession.swift in Sources */,
+				A7C0A11E5F60718293A4C108 /* CognitoSrp.swift in Sources */,
 				A1B2C3D4E5F60718293A4B24 /* BuildingDetailView.swift in Sources */,
 				106CF645819C590D42DEE4A4 /* BuildingGraphBuilder.swift in Sources */,
 				A1B2C3D4E5F60718293A4B26 /* BuildingHomeView.swift in Sources */,

@@ -8,7 +8,7 @@ using UnityEngine;
 using UnityEngine.Networking;
 
 /// <summary>
-/// Cognito hosted UI (PKCE) for the navigator. Google is the primary sign-in.
+/// Cognito hosted UI (PKCE) for Google sign-in. Email and password use CognitoSrp.
 /// iOS uses the website's https redirect. The Editor uses the registered localhost redirect.
 /// </summary>
 public static class CognitoAuth
@@ -89,7 +89,7 @@ public static class CognitoAuth
     static async Task<string> WaitNative(string authorizeUrl, string redirectUri)
     {
         GnarlyCognitoBegin(authorizeUrl, redirectUri);
-        for (var i = 0; i < 600; i++)
+        for (var i = 0; i < 720; i++)
         {
             await Task.Delay(250);
             var pointer = GnarlyCognitoPoll();

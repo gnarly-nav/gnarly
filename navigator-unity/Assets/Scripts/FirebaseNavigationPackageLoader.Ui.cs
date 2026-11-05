@@ -19,6 +19,9 @@ public sealed partial class FirebaseNavigationPackageLoader
     Button signInButton;
     Text signInLabel;
     Button emailButton;
+    GameObject emailCard;
+    InputField emailField;
+    InputField passwordField;
     FirebaseScanChoice selectedScan;
     string expandedBuildingId;
     System.Collections.Generic.List<FirebaseScanChoice> renderedLibrary;
@@ -61,6 +64,23 @@ public sealed partial class FirebaseNavigationPackageLoader
         signInLabel = MapUi.ButtonLabel(signInButton);
         emailButton = MapUi.Button(MapUi.Rect("EmailSignIn", header, new Vector2(1, 1), new Vector2(1, 1),
             new Vector2(-250, -156), new Vector2(0, -96)), "Email", MapUi.SurfaceRaised, MapUi.TextSecondary, 26, OnEmailSignIn, 18f);
+        var emailRect = MapUi.Rect("EmailCard", safe, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
+            new Vector2(-390, -1080), new Vector2(390, -340));
+        emailCard = emailRect.gameObject;
+        MapUi.Panel(emailRect, MapUi.Surface, 36f, true);
+        MapUi.Label(MapUi.Rect("EmailTitle", emailRect, new Vector2(0, 1), new Vector2(1, 1),
+            new Vector2(28, -86), new Vector2(-28, -22)), "Email and password", 36, MapUi.TextPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
+        emailField = TextEntry(emailRect, "EmailAddress", "name@school.edu", new Vector2(28, -186), new Vector2(-28, -100), false);
+        passwordField = TextEntry(emailRect, "Password", "Password", new Vector2(28, -292), new Vector2(-28, -206), true);
+        MapUi.Button(MapUi.Rect("EmailSubmit", emailRect, new Vector2(0, 1), new Vector2(1, 1),
+            new Vector2(28, -400), new Vector2(-28, -314)), "Sign in", MapUi.Accent, MapUi.AccentText, 32, OnEmailSubmit, 24f);
+        MapUi.Button(MapUi.Rect("EmailCancel", emailRect, new Vector2(0, 1), new Vector2(1, 1),
+            new Vector2(28, -496), new Vector2(-28, -418)), "Cancel", MapUi.SurfaceRaised, MapUi.TextSecondary, 30, () =>
+            {
+                if (passwordField != null) passwordField.text = "";
+                if (emailCard != null) emailCard.SetActive(false);
+            }, 24f);
+        emailCard.SetActive(false);
 
         var scrollRoot = MapUi.Rect("MapChoices", safe, Vector2.zero, Vector2.one,
             new Vector2(0, 204), new Vector2(0, -324));
@@ -333,24 +353,31 @@ public sealed partial class FirebaseNavigationPackageLoader
             SetStatus("Signed out. Maps stay available without an account.");
             return;
         }
-        _ = SignInAsync(true);
+        _ = SignInAsync();
     }
 
     void OnEmailSignIn()
     {
-        if (busy || repository == null || repository.IsAuthenticated) return;
-        _ = SignInAsync(false);
+        if (busy || repository == null || repository.IsAuthenticated || emailCard == null) return;
+        emailCard.SetActive(!emailCard.activeSelf);
     }
 
-    async Task SignInAsync(bool google)
+    void OnEmailSubmit()
+    {
+        if (busy || repository == null || emailField == null || passwordField == null) return;
+        _ = SubmitEmailAsync();
+    }
+
+    async Task SubmitEmailAsync()
     {
         if (busy) return;
         busy = true;
         try
         {
-            SetStatus(google ? "Opening Google sign-in…" : "Opening email sign-in…");
-            if (google) await repository.SignInWithGoogleAsync();
-            else await repository.SignInWithEmailAsync();
+            SetStatus("Signing in…");
+            await repository.SignInWithPasswordAsync(emailField.text, passwordField.text);
+            passwordField.text = "";
+            if (emailCard != null) emailCard.SetActive(false);
             SetStatus(string.IsNullOrEmpty(repository.Email) ? "Signed in." : "Signed in as " + repository.Email + ".");
         }
         catch (Exception exception)
@@ -362,6 +389,48 @@ public sealed partial class FirebaseNavigationPackageLoader
             busy = false;
             RefreshUi();
         }
+    }
+
+    async Task SignInAsync()
+    {
+        if (busy) return;
+        busy = true;
+        try
+        {
+            SetStatus("Opening Google sign-in…");
+            await repository.SignInWithGoogleAsync();
+            SetStatus(string.IsNullOrEmpty(repository.Email) ? "Signed in." : "Signed in as " + repository.Email + ".");
+        }
+        catch (Exception exception)
+        {
+            SetStatus(exception.Message);
+        }
+        finally
+        {
+            busy = false;
+            RefreshUi();
+        }
+    }
+
+    InputField TextEntry(RectTransform parent, string name, string placeholder, Vector2 offsetMin, Vector2 offsetMax, bool password)
+    {
+        var rect = MapUi.Rect(name, parent, new Vector2(0, 1), new Vector2(1, 1), offsetMin, offsetMax);
+        var background = MapUi.Panel(rect, MapUi.SurfaceRaised, 22f, true);
+        var field = rect.gameObject.AddComponent<InputField>();
+        field.targetGraphic = background;
+        field.lineType = InputField.LineType.SingleLine;
+        if (password)
+        {
+            field.contentType = InputField.ContentType.Password;
+            field.inputType = InputField.InputType.Password;
+        }
+        else field.keyboardType = TouchScreenKeyboardType.EmailAddress;
+        var hint = MapUi.Label(MapUi.Stretch("Placeholder", rect, 20f), placeholder, 30, MapUi.TextSecondary);
+        var typed = MapUi.Label(MapUi.Stretch("Value", rect, 20f), "", 30, MapUi.TextPrimary);
+        typed.supportRichText = false;
+        field.placeholder = hint;
+        field.textComponent = typed;
+        return field;
     }
 
     void OnPrimaryAction()
@@ -422,6 +491,7 @@ public sealed partial class FirebaseNavigationPackageLoader
         if (signInLabel != null) signInLabel.text = signedIn ? "Sign out" : "Google";
         if (signInButton != null) signInButton.interactable = !busy;
         if (emailButton != null) emailButton.gameObject.SetActive(!signedIn);
+        if (signedIn && emailCard != null) emailCard.SetActive(false);
     }
 
     void Update()
@@ -452,6 +522,9 @@ public sealed partial class FirebaseNavigationPackageLoader
         signInButton = null;
         signInLabel = null;
         emailButton = null;
+        emailCard = null;
+        emailField = null;
+        passwordField = null;
         renderedLibrary = null;
     }
 

@@ -18,7 +18,7 @@ Then build:
 
 1. In **File → Build Profiles**, choose **iOS**, click **Switch Platform**, then **Build**. This requires the iOS Build Support module. No Firebase plist is required.
 2. On a Mac, open `Unity-iPhone.xcodeproj`. Under **Signing & Capabilities**, choose your Team. If the default bundle ID is unavailable, change it in Unity Player Settings first, then rebuild. Run on a LiDAR iPhone with iOS 17.4 or later and watch the Xcode console for `[Gnarly]` lines.
-3. The launch screen lists published maps. **Google** or **Email** opens the Cognito hosted UI. Skipping sign-in still lists and downloads maps. A refresh token, when sign-in succeeds, is kept in the iOS Keychain. Downloaded maps work with the network off.
+3. The launch screen lists published maps. **Google** opens the Cognito hosted UI. **Email** asks for the email and password of an existing Cognito user (`USER_SRP_AUTH`, the same challenge as the website) and does not create an account. Skipping sign-in still lists and downloads maps. A refresh token, when sign-in succeeds, is kept in the iOS Keychain. Downloaded maps work with the network off.
 
 ## Map source
 

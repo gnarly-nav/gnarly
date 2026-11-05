@@ -2,6 +2,8 @@ import SwiftUI
 
 struct AuthView: View {
     @EnvironmentObject private var auth: CognitoSession
+    @State private var email = ""
+    @State private var password = ""
 
     var body: some View {
         ScrollView {
@@ -36,8 +38,35 @@ struct AuthView: View {
                     Task { _ = await auth.signInWithGoogle() }
                 }
 
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Email")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MapperTheme.muted)
+                    TextField("name@school.edu", text: $email)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.emailAddress)
+                        .textContentType(.username)
+                        .autocorrectionDisabled()
+                        .font(.body)
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 44)
+                        .background(MapperTheme.raised, in: RoundedRectangle(cornerRadius: 12))
+                        .foregroundStyle(.white)
+                    Text("Password")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MapperTheme.muted)
+                    SecureField("Password", text: $password)
+                        .textContentType(.password)
+                        .font(.body)
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 44)
+                        .background(MapperTheme.raised, in: RoundedRectangle(cornerRadius: 12))
+                        .foregroundStyle(.white)
+                }
+                .disabled(auth.isWorking)
+
                 Button {
-                    Task { _ = await auth.signInWithEmail() }
+                    Task { _ = await auth.signInWithEmail(email, password: password) }
                 } label: {
                     Text("Sign in with email")
                         .font(.subheadline.weight(.semibold))
@@ -45,7 +74,7 @@ struct AuthView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(MapperTheme.accent)
-                .disabled(auth.isWorking)
+                .disabled(auth.isWorking || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty)
 
                 Text("Anyone signed in can browse maps. Only the authorized editor account can publish or move a building.")
                     .font(.footnote)
