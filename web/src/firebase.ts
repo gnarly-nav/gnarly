@@ -8,7 +8,7 @@ import {
 } from 'firebase/auth';
 import { collection, deleteField, doc, GeoPoint, getDoc, getDocs, getFirestore, onSnapshot, runTransaction, Timestamp, type DocumentData } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes } from 'firebase/storage';
-import type { Building, BuildingLayout, Graph, Node, ScanFeatures, SurfaceColorFace, SurfaceColors, ZoneConnections, ZoneView } from './data';
+import type { Building, BuildingLayout, GaussianSplat, Graph, Node, ScanFeatures, SurfaceColorFace, SurfaceColors, ZoneConnections, ZoneView } from './data';
 import { graphDigest } from './graphStore.ts';
 import { emptyZoneConnections, normalizeZoneConnections } from './zoneConnections.ts';
 
@@ -77,6 +77,32 @@ async function loadSurfaceColors(jsonPath: string, atlasPath: string): Promise<S
       }
     }
     return { atlasUrl, atlasWidth: raw.atlasWidth || 1, atlasHeight: raw.atlasHeight || 1, surfaces };
+  } catch {
+    return undefined;
+  }
+}
+
+async function loadGaussianSplat(jsonPath: string, dataPath: string): Promise<GaussianSplat | undefined> {
+  try {
+    const raw = await fetchStorageJSON(jsonPath) as {
+      format?: string;
+      splatFile?: string;
+      splatCount?: number;
+      bounds?: { min: [number, number, number]; max: [number, number, number] };
+    };
+    if (!raw.format || !['spz', 'ply', 'splat'].includes(raw.format)) return undefined;
+    let splatUrl: string | undefined;
+    try {
+      splatUrl = URL.createObjectURL(await (await fetchStorage(dataPath)).blob());
+    } catch {
+      splatUrl = undefined;
+    }
+    return {
+      splatUrl,
+      format: raw.format as 'spz' | 'ply' | 'splat',
+      splatCount: raw.splatCount,
+      bounds: raw.bounds,
+    };
   } catch {
     return undefined;
   }
@@ -161,7 +187,10 @@ export async function loadBuilding(input: Building): Promise<Building> {
       const colors = scanResult.scan
         ? await loadSurfaceColors(zone.surfaceColorsPath || zoneBase + '/surface-colors.json', zone.surfaceColorAtlasPath || zoneBase + '/surface-colors.jpg')
         : undefined;
-      const scan = scanResult.scan && colors ? { ...scanResult.scan, colors } : scanResult.scan;
+      const splat = scanResult.scan
+        ? await loadGaussianSplat(zone.gaussianSplatPath || zoneBase + '/gaussian-splat.json', zone.gaussianSplatDataPath || zoneBase + '/gaussian-splat.spz')
+        : undefined;
+      const scan = scanResult.scan ? { ...scanResult.scan, colors, splat } : scanResult.scan;
       let rawScanStatus = '';
       if (!scan) {
         const rawPath = zone.scanJsonPath || storageBase + '/zones/' + item.id + '/scan.json';

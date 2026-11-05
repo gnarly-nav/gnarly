@@ -39,6 +39,9 @@ export type ZoneRecord = {
   structurePath?: string;
   surfaceColorsPath?: string;
   surfaceColorAtlasPath?: string;
+  transformsPath?: string;
+  gaussianSplatPath?: string;
+  gaussianSplatDataPath?: string;
   relocalizationHint?: string;
   startNodeId?: string;
 };
@@ -128,11 +131,16 @@ export const FILE_LIMITS: Record<string, number> = {
   'building-layout.json': 1024 * 1024,
   'surface-colors.json': 8 * 1024 * 1024,
   'surface-colors.jpg': 25 * 1024 * 1024,
+  'transforms.json': 4 * 1024 * 1024,
+  'gaussian-splat.json': 2 * 1024 * 1024,
+  'gaussian-splat.spz': 50 * 1024 * 1024,
+  'gaussian-splat.ply': 100 * 1024 * 1024,
+  'gaussian-splat.splat': 100 * 1024 * 1024,
 };
 
-export const TOTAL_LIMIT = 250 * 1024 * 1024;
+export const TOTAL_LIMIT = 400 * 1024 * 1024;
 export const ZONE_REQUIRED = ['building.json', 'scan.json', 'scan-features.json', 'structure.usdz', 'worldmap.bin'];
-export const ZONE_OPTIONAL = ['surface-colors.json', 'surface-colors.jpg'];
+export const ZONE_OPTIONAL = ['surface-colors.json', 'surface-colors.jpg', 'transforms.json', 'gaussian-splat.json', 'gaussian-splat.spz', 'gaussian-splat.ply', 'gaussian-splat.splat'];
 export const BUILDING_FILES = ['zone-connections.json', 'building-layout.json'];
 export const UPLOAD_TTL_MS = 15 * 60 * 1000;
 export const DOWNLOAD_TTL_MS = 5 * 60 * 1000;
@@ -149,6 +157,11 @@ const CONTENT_TYPES: Record<string, readonly string[]> = {
   'building-layout.json': ['application/json'],
   'surface-colors.json': ['application/json'],
   'surface-colors.jpg': ['image/jpeg'],
+  'transforms.json': ['application/json'],
+  'gaussian-splat.json': ['application/json'],
+  'gaussian-splat.spz': ['application/octet-stream'],
+  'gaussian-splat.ply': ['application/octet-stream', 'model/ply', 'text/plain'],
+  'gaussian-splat.splat': ['application/octet-stream'],
 };
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
@@ -187,7 +200,7 @@ export function objectPath(buildingId: string, versionId: string, name: string, 
 }
 
 const PATH_RULES = [
-  /^buildings\/([^/]+)\/([^/]+)\/zones\/([^/]+)\/(building\.json|scan\.json|scan-features\.json|structure\.usdz|surface-colors\.json|surface-colors\.jpg)$/,
+  /^buildings\/([^/]+)\/([^/]+)\/zones\/([^/]+)\/(building\.json|scan\.json|scan-features\.json|structure\.usdz|surface-colors\.json|surface-colors\.jpg|transforms\.json|gaussian-splat\.json|gaussian-splat\.(?:spz|ply|splat))$/,
   /^buildings\/([^/]+)\/([^/]+)\/zones\/([^/]+)\/graph-edits\/([^/]+\.json)$/,
   /^buildings\/([^/]+)\/([^/]+)\/graph-edits\/([^/]+\.json)$/,
   /^buildings\/([^/]+)\/([^/]+)\/worldmaps\/([^/]+)\.bin$/,

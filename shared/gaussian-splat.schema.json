@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gnarly Gaussian Splat",
+  "description": "Gaussian splat representation for one zone, trained from keyframe photos and LiDAR depth. The splat data file is the sibling file named by `splatFile`.",
+  "type": "object",
+  "required": ["schemaVersion", "zoneId", "coordinateSystem", "splatFile", "format"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "zoneId": { "type": "string", "minLength": 1 },
+    "coordinateSystem": { 
+      "const": "arkit-world-meters",
+      "description": "Splat is in the zone's ARKit world coordinate system, matching scan-features.json"
+    },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "trainedAt": { "type": "string", "format": "date-time" },
+    "splatFile": { 
+      "type": "string", 
+      "description": "Splat data file name: .spz (Niantic SPZ compressed), .ply (standard Gaussian splat), or .splat (antimatter15 format)."
+    },
+    "format": { 
+      "enum": ["spz", "ply", "splat"],
+      "description": "Format of the splat file: spz=Niantic compressed, ply=standard 3DGS, splat=antimatter15"
+    },
+    "splatCount": { 
+      "type": "integer", 
+      "minimum": 0,
+      "description": "Number of Gaussians in the splat"
+    },
+    "trainingConfig": {
+      "type": "object",
+      "description": "Training configuration and metadata",
+      "properties": {
+        "method": { 
+          "enum": ["splatfacto", "dn-splatter", "2dgs", "3dgs"],
+          "description": "Training method used"
+        },
+        "depthSupervision": { 
+          "type": "boolean",
+          "description": "Whether LiDAR depth supervision was used"
+        },
+        "keyframeCount": { 
+          "type": "integer", 
+          "minimum": 0,
+          "description": "Number of keyframes used for training"
+        },
+        "iterations": { 
+          "type": "integer", 
+          "minimum": 0,
+          "description": "Training iterations"
+        },
+        "refinedPoses": {
+          "type": "boolean",
+          "description": "Whether camera poses were refined during training"
+        }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "description": "Quality metrics from training",
+      "properties": {
+        "psnr": { "type": "number", "description": "Peak Signal-to-Noise Ratio" },
+        "ssim": { "type": "number", "description": "Structural Similarity Index" },
+        "lpips": { "type": "number", "description": "Learned Perceptual Image Patch Similarity" }
+      }
+    },
+    "bounds": {
+      "type": "object",
+      "description": "Axis-aligned bounding box in ARKit world meters",
+      "required": ["min", "max"],
+      "properties": {
+        "min": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "Minimum [x, y, z] corner"
+        },
+        "max": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "Maximum [x, y, z] corner"
+        }
+      }
+    },
+    "notes": { "type": "string" }
+  }
+}

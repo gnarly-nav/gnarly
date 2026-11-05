@@ -13,7 +13,8 @@ enum POCPackageExporter {
         stairs: StairCatalog? = nil,
         recoveredStairs: [StairVolume] = [],
         recoveredFloors: [FloorSlab] = [],
-        surfaceColors: SurfaceColorBakeResult? = nil
+        surfaceColors: SurfaceColorBakeResult? = nil,
+        colorRecorder: SurfaceColorRecorder? = nil
     ) throws -> URL {
         let documentsDirectory = try FileManager.default.url(
             for: .documentDirectory,
@@ -104,6 +105,13 @@ enum POCPackageExporter {
             try surfaceColors.atlas.write(to: packageURL.appendingPathComponent(SurfaceColorBakeResult.atlasFileName), options: .atomic)
             files.append(SurfaceColorBakeResult.jsonFileName)
             files.append(SurfaceColorBakeResult.atlasFileName)
+        }
+        
+        // Export transforms.json for Gaussian splat training if keyframes are available
+        if let colorRecorder,
+           let transformsData = colorRecorder.exportTransforms(zoneID: safeZoneID, capturedAt: capturedAt) {
+            try transformsData.write(to: packageURL.appendingPathComponent("transforms.json"), options: .atomic)
+            files.append("transforms.json")
         }
         if let stairs, !stairs.stairs.isEmpty {
             files.append("stairs.json")

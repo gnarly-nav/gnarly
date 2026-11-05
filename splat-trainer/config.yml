@@ -1,0 +1,29 @@
+# Default configuration for Gaussian splat training
+
+# Training method: splatfacto, dn-splatter, or 2dgs
+method: splatfacto
+
+# Training iterations
+max_iterations: 30000
+
+# Depth supervision from LiDAR
+depth_supervision:
+  enabled: true
+  loss_weight: 0.1
+  confidence_threshold: 1  # 0=low, 1=medium, 2=high
+
+# Splatfacto-specific settings
+splatfacto:
+  num_downscales: 2
+  cull_alpha_thresh: 0.005
+  continue_cull_post_densification: true
+  
+# Compression settings
+compression:
+  format: spz  # spz, ply, or splat
+  quality: high  # low, medium, high
+
+# Output settings
+output:
+  max_splats: 1000000  # Mobile performance target: ~500k-1M splats per zone
+  coordinate_system: arkit-world-meters

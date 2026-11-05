@@ -90,6 +90,41 @@ export class PublishApi {
     return { id, name, created: true };
   }
 
+  async trainSplat(caller: Caller, buildingId: string, body: unknown) {
+    const input = objectBody(body);
+    const zoneId = assertId(stringField(input, 'zoneId', 'zoneId'), 'zoneId');
+    const method = stringField(input, 'method', 'method', 'splatfacto');
+    const building = await this.getBuildingOrThrow(buildingId);
+    assertPublish(caller.uid, building, this.deps.adminUid);
+    
+    if (!['splatfacto', 'dn-splatter', '2dgs'].includes(method)) {
+      throw new ApiError(400, 'invalid_method', 'Method must be splatfacto, dn-splatter, or 2dgs.');
+    }
+    
+    // Verify zone exists and has transforms.json
+    const versionId = building.activeVersion;
+    if (!versionId) throw new ApiError(404, 'not_found', 'Building has no active version.');
+    
+    const transformsPath = objectPath(buildingId, versionId, 'transforms.json', zoneId);
+    const exists = await this.deps.objects.exists(transformsPath);
+    if (!exists) {
+      throw new ApiError(404, 'not_found', 'Zone has no transforms.json. Export keyframes from the mapper first.');
+    }
+    
+    // In production, this would trigger the training worker (Cloud Run Job, Vertex AI, etc.)
+    // For now, return a job ID and status
+    const jobId = `splat-${buildingId}-${zoneId}-${Date.now()}`;
+    
+    return {
+      jobId,
+      buildingId,
+      zoneId,
+      method,
+      status: 'queued',
+      message: 'Splat training job queued. Poll /v1/buildings/{buildingId}/splat-jobs/{jobId} for status.',
+    };
+  }
+
   async listBuildings(caller: Caller) {
     await this.limit('list', caller, 'catalog');
     const buildings = [];

@@ -27,6 +27,8 @@ const validators: Record<string, ValidateFn> = {
   'zone-connections.json': ajv.compile(loadSchema('zone-connections.schema.json')),
   'building-layout.json': ajv.compile(loadSchema('building-layout.schema.json')),
   'surface-colors.json': ajv.compile(loadSchema('surface-colors.schema.json')),
+  'transforms.json': ajv.compile(loadSchema('transforms.schema.json')),
+  'gaussian-splat.json': ajv.compile(loadSchema('gaussian-splat.schema.json')),
 };
 
 function schemaErrors(validate: ValidateFn): string {

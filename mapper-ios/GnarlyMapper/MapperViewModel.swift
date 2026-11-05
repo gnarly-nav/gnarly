@@ -467,7 +467,8 @@ final class MapperViewModel: ObservableObject {
                             stairs: draft.stairs.isEmpty ? nil : draft,
                             recoveredStairs: recoveredStairs,
                             recoveredFloors: recoveredFloors,
-                            surfaceColors: colors
+                            surfaceColors: colors,
+                            colorRecorder: self.colorRecorder
                         )
                         try StairCatalogStore.save(draft)
                         self.catalog = draft
