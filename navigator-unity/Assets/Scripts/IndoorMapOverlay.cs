@@ -421,8 +421,8 @@ public partial class IndoorMapOverlay : MonoBehaviour
                 default: continue;
             }
             if (width < 0.01f || height < 0.01f) continue;
-            // One renderer per face: Sprites/Default skips depth writes, so each face must sort
-            // against the scan boxes by its own center.
+            // Render photo textures with proper depth testing to avoid sorting artifacts.
+            // Previous approach used Sprites/Default (no depth writes), which caused Z-fighting.
             var faceCenter = center + offset;
             var vertices = new Vector3[4];
             var uvs = new Vector2[4];
@@ -435,12 +435,18 @@ public partial class IndoorMapOverlay : MonoBehaviour
                 uvs[corner] = surfaceColors.AtlasUV(face, cu, cv);
             }
             var mesh = new Mesh { name = "RoomPlanPhoto-" + face.face, vertices = vertices, uv = uvs, triangles = new[] { 0, 1, 2, 0, 2, 3 } };
+            mesh.RecalculateNormals();
             mesh.RecalculateBounds();
             photoMeshes.Add(mesh);
             if (photoMaterial == null)
             {
-                photoMaterial = MakeMaterial(Color.white);
+                // Use Unlit/Transparent shader with depth test enabled but depth write disabled
+                // This allows proper occlusion without Z-fighting between photo quads
+                photoMaterial = new Material(Shader.Find("Unlit/Transparent"));
                 photoMaterial.mainTexture = surfaceColors.atlas;
+                photoMaterial.SetInt("_ZWrite", 0);  // No depth writes to avoid Z-fighting
+                photoMaterial.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.LessEqual);
+                materials.Add(photoMaterial);
             }
             var photo = new GameObject(mesh.name);
             photo.transform.SetParent(target, false);

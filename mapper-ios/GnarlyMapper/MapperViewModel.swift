@@ -430,13 +430,14 @@ final class MapperViewModel: ObservableObject {
         }
         let surfaces = BakeSurface.all(in: room, recoveredStairs: recoveredStairs, recoveredFloors: recoveredFloors)
         let keyframes = colorRecorder.keyframes
+        let anchorTransforms = colorRecorder.getAnchorTransforms(arSession)
         let capturedAt = ISO8601DateFormatter().string(from: Date())
         statusText = keyframes.isEmpty ? savingStatus : "Coloring the model from \(keyframes.count) scan photos…"
 
         Task { @MainActor [weak self] in
             // Baking is CPU-heavy (every photo is projected onto every visible face), so keep it off the main actor.
             let colors = await Task.detached(priority: .userInitiated) {
-                SurfaceColorBaker.bake(surfaces: surfaces, keyframes: keyframes, zoneID: packageZoneID, capturedAt: capturedAt) { fraction in
+                SurfaceColorBaker.bake(surfaces: surfaces, keyframes: keyframes, anchorTransforms: anchorTransforms, zoneID: packageZoneID, capturedAt: capturedAt) { fraction in
                     Task { @MainActor [weak self] in
                         guard let self, self.statusText.hasPrefix("Coloring the model") else { return }
                         self.statusText = "Coloring the model from scan photos… \(Int(fraction * 100))%"
@@ -690,7 +691,7 @@ final class MapperViewModel: ObservableObject {
             guard let self, self.isScanning else { return }
             self.sampleWalkedPathIfNeeded()
             if let frame = self.arSession.currentFrame {
-                self.colorRecorder.consider(frame)
+                self.colorRecorder.consider(frame, session: self.arSession)
                 self.colorFrameCount = self.colorRecorder.count
                 self.refreshCoverageIfNeeded()
             }
