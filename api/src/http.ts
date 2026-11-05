@@ -63,6 +63,10 @@ export function createHandler(deps: Deps & { trustProxy?: boolean; corsOrigins?:
         send(res, 200, await api.commitPublish(caller, buildingId, decodeURIComponent(publish[1])));
         return;
       }
+      if (req.method === 'POST' && rest === 'train-splat') {
+        send(res, 200, await api.trainSplat(caller, buildingId, await readJson(req)));
+        return;
+      }
       throw new ApiError(404, 'not_found', 'Unknown publish API route.');
     } catch (error) {
       if (error instanceof ApiError) {

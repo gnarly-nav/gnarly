@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gnarly Transforms (nerfstudio/COLMAP format)",
+  "description": "Camera keyframes with poses, intrinsics, and depth for Gaussian splat training. Compatible with nerfstudio and COLMAP pipelines.",
+  "type": "object",
+  "required": ["schemaVersion", "zoneId", "coordinateSystem", "frames"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "zoneId": { "type": "string", "minLength": 1 },
+    "coordinateSystem": { 
+      "const": "arkit-world-meters",
+      "description": "All transforms are in the zone's ARKit world coordinate system"
+    },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "camera_model": {
+      "enum": ["OPENCV", "OPENCV_FISHEYE", "SIMPLE_PINHOLE", "PINHOLE"],
+      "default": "OPENCV",
+      "description": "Camera distortion model (OPENCV for ARKit with k1,k2,p1,p2 distortion)"
+    },
+    "frames": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file_path", "transform_matrix", "fl_x", "fl_y", "cx", "cy", "w", "h"],
+        "properties": {
+          "file_path": { 
+            "type": "string",
+            "description": "Relative path to the RGB image (JPEG or PNG)"
+          },
+          "depth_file_path": {
+            "type": "string",
+            "description": "Relative path to the depth map (Float32 .bin or .png, meters)"
+          },
+          "confidence_file_path": {
+            "type": "string",
+            "description": "Relative path to the LiDAR confidence map (0=low, 1=medium, 2=high)"
+          },
+          "transform_matrix": {
+            "type": "array",
+            "description": "4x4 camera-to-world transform matrix (column-major or row-major as per convention)",
+            "items": {
+              "type": "array",
+              "items": { "type": "number" },
+              "minItems": 4,
+              "maxItems": 4
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "fl_x": { 
+            "type": "number",
+            "description": "Focal length x in pixels"
+          },
+          "fl_y": { 
+            "type": "number",
+            "description": "Focal length y in pixels"
+          },
+          "cx": { 
+            "type": "number",
+            "description": "Principal point x in pixels"
+          },
+          "cy": { 
+            "type": "number",
+            "description": "Principal point y in pixels"
+          },
+          "w": { 
+            "type": "integer",
+            "description": "Image width in pixels"
+          },
+          "h": { 
+            "type": "integer",
+            "description": "Image height in pixels"
+          },
+          "k1": { 
+            "type": "number",
+            "default": 0,
+            "description": "Radial distortion coefficient k1"
+          },
+          "k2": { 
+            "type": "number",
+            "default": 0,
+            "description": "Radial distortion coefficient k2"
+          },
+          "p1": { 
+            "type": "number",
+            "default": 0,
+            "description": "Tangential distortion coefficient p1"
+          },
+          "p2": { 
+            "type": "number",
+            "default": 0,
+            "description": "Tangential distortion coefficient p2"
+          },
+          "depth_scale": {
+            "type": "number",
+            "default": 1.0,
+            "description": "Scale factor to convert depth values to meters"
+          },
+          "depth_width": {
+            "type": "integer",
+            "description": "Depth map width (may differ from image width)"
+          },
+          "depth_height": {
+            "type": "integer",
+            "description": "Depth map height (may differ from image height)"
+          }
+        }
+      }
+    },
+    "applied_transform": {
+      "type": "array",
+      "description": "Optional transform applied to all frames (e.g., to align with NeRF conventions)",
+      "items": {
+        "type": "array",
+        "items": { "type": "number" },
+        "minItems": 4,
+        "maxItems": 4
+      },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "aabb_scale": {
+      "type": "number",
+      "description": "Scene scale for instant-ngp style training (typically 1, 2, 4, 8, or 16)"
+    },
+    "notes": { "type": "string" }
+  }
+}

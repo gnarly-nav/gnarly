@@ -313,6 +313,21 @@ final class SurfaceColorRecorder {
         return count > 0 ? laplacianSum / Float(count) : 0
     }
 
+    private static func confidenceData(_ buffer: CVPixelBuffer) -> Data? {
+        guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_OneComponent8 else { return nil }
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+        var data = Data(capacity: width * height)
+        for row in 0 ..< height {
+            data.append(base.advanced(by: row * rowBytes).assumingMemoryBound(to: UInt8.self), count: width)
+        }
+        return data
+    }
+
     private static func makeDirectory() -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("surface-color-\(UUID().uuidString)", isDirectory: true)
@@ -324,6 +339,62 @@ final class SurfaceColorRecorder {
         let forwardA = simd_normalize(-SIMD3<Float>(a.columns.2.x, a.columns.2.y, a.columns.2.z))
         let forwardB = simd_normalize(-SIMD3<Float>(b.columns.2.x, b.columns.2.y, b.columns.2.z))
         return acos(max(-1, min(1, simd_dot(forwardA, forwardB))))
+    }
+
+    /// Exports keyframes in nerfstudio/COLMAP transforms.json format for Gaussian splat training.
+    /// Returns the JSON data ready to write, or nil if keyframes are unavailable.
+    func exportTransforms(zoneID: String, capturedAt: String) -> Data? {
+        let frames = keyframes
+        guard !frames.isEmpty else { return nil }
+
+        var frameData: [[String: Any]] = []
+        for (index, keyframe) in frames.enumerated() {
+            let fileName = String(format: "frame-%04d.jpg", index)
+            
+            // Convert ARKit camera-to-world transform to 4x4 array (row-major for JSON readability)
+            let t = keyframe.cameraTransform
+            let transformMatrix: [[Float]] = [
+                [t.columns.0.x, t.columns.1.x, t.columns.2.x, t.columns.3.x],
+                [t.columns.0.y, t.columns.1.y, t.columns.2.y, t.columns.3.y],
+                [t.columns.0.z, t.columns.1.z, t.columns.2.z, t.columns.3.z],
+                [t.columns.0.w, t.columns.1.w, t.columns.2.w, t.columns.3.w]
+            ]
+
+            var frame: [String: Any] = [
+                "file_path": fileName,
+                "transform_matrix": transformMatrix,
+                "fl_x": keyframe.focal.x,
+                "fl_y": keyframe.focal.y,
+                "cx": keyframe.principal.x,
+                "cy": keyframe.principal.y,
+                "w": keyframe.width,
+                "h": keyframe.height
+            ]
+
+            if let depthURL = keyframe.depthURL {
+                frame["depth_file_path"] = String(format: "frame-%04d.depth", index)
+                frame["depth_width"] = keyframe.depthWidth
+                frame["depth_height"] = keyframe.depthHeight
+                frame["depth_scale"] = 1.0
+            }
+
+            if keyframe.depthConfidenceURL != nil {
+                frame["confidence_file_path"] = String(format: "frame-%04d.conf", index)
+            }
+
+            frameData.append(frame)
+        }
+
+        let document: [String: Any] = [
+            "schemaVersion": 1,
+            "zoneId": zoneID,
+            "coordinateSystem": "arkit-world-meters",
+            "capturedAt": capturedAt,
+            "camera_model": "OPENCV",
+            "frames": frameData
+        ]
+
+        return try? JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     }
 }
 
