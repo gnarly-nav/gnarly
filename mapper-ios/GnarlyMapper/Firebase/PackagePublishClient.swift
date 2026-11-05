@@ -160,7 +160,7 @@ struct PackagePublishClient {
         guard let afterText = String(data: afterData, encoding: .utf8) else {
             throw PackagePublishError("The building placement could not be encoded.")
         }
-        let body = #"{"path":\#(jsonLiteral(recordPath)),"before":\#(rawBefore),"after":\#(afterText)}"#
+        let body = #"{"path":\#(Self.jsonLiteral(recordPath)),"before":\#(rawBefore),"after":\#(afterText)}"#
         _ = try await perform("PUT", path: "/v1/records", rawBody: Data(body.utf8))
     }
 
@@ -248,13 +248,13 @@ struct PackagePublishClient {
 
     /// Previous display layout, if the active package has one. A missing layout is not an error.
     func downloadActiveLayout(buildingId: String) async throws -> Data? {
-        let package: PublishedPackage
-        do { package = try await package(buildingId: buildingId, versionId: nil) }
+        let published: PublishedPackage
+        do { published = try await package(buildingId: buildingId, versionId: nil) }
         catch let error as PackagePublishError {
             if error.message.contains("no active") || error.message.contains("not published") || error.message.contains("missing") { return nil }
             throw error
         }
-        guard let file = package.files.first(where: { $0.name == "building-layout.json" }) else { return nil }
+        guard let file = published.files.first(where: { $0.name == "building-layout.json" }) else { return nil }
         return try? await download(file.url)
     }
 

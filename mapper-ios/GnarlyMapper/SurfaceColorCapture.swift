@@ -69,8 +69,9 @@ final class SurfaceColorRecorder {
         lock.lock()
         defer { lock.unlock() }
         var transforms: [UUID: simd_float4x4] = [:]
+        let sessionAnchors = session.currentFrame?.anchors ?? []
         for (id, _) in anchors {
-            if let anchor = session.anchors.first(where: { $0.identifier == id }) {
+            if let anchor = sessionAnchors.first(where: { $0.identifier == id }) {
                 transforms[id] = anchor.transform
             }
         }
@@ -271,8 +272,7 @@ final class SurfaceColorRecorder {
         guard let base = CVPixelBufferGetBaseAddress(image) else { return 0 }
         
         let rowBytes = CVPixelBufferGetBytesPerRow(image)
-        let pixelFormat = CVPixelBufferGetPixelFormatType(image)
-        
+
         // Sample center region at reduced resolution for speed
         let sampleWidth = min(width / 4, 160)
         let sampleHeight = min(height / 4, 120)
@@ -311,21 +311,6 @@ final class SurfaceColorRecorder {
         }
         
         return count > 0 ? laplacianSum / Float(count) : 0
-    }
-
-    private static func confidenceData(_ buffer: CVPixelBuffer) -> Data? {
-        guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_OneComponent8 else { return nil }
-        CVPixelBufferLockBaseAddress(buffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
-        let width = CVPixelBufferGetWidth(buffer)
-        let height = CVPixelBufferGetHeight(buffer)
-        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
-        var data = Data(capacity: width * height)
-        for row in 0 ..< height {
-            data.append(base.advanced(by: row * rowBytes).assumingMemoryBound(to: UInt8.self), count: width)
-        }
-        return data
     }
 
     private static func makeDirectory() -> URL {
@@ -1196,7 +1181,7 @@ enum SurfaceColorBaker {
     /// Uses a reference frame (median exposure) and solves for relative gains based on overlapping texels.
     private static func computeExposureGains(
         keyframes: [ColorKeyframe],
-        bestViews: UnsafeMutableBufferPointer<(color: SIMD3<Float>, weight: Float, frameIndex: Int)>,
+        bestViews: [(color: SIMD3<Float>, weight: Float, frameIndex: Int)],
         faces: [Face]
     ) -> [Float] {
         guard keyframes.count > 1 else { return [1.0] }
@@ -1279,7 +1264,7 @@ enum SurfaceColorBaker {
     
     /// Apply exposure gains to normalize brightness across all views.
     private static func applyExposureNormalization(
-        bestViews: inout UnsafeMutableBufferPointer<(color: SIMD3<Float>, weight: Float, frameIndex: Int)>,
+        bestViews: inout [(color: SIMD3<Float>, weight: Float, frameIndex: Int)],
         gains: [Float]
     ) {
         for index in 0 ..< bestViews.count {
@@ -1300,10 +1285,10 @@ enum SurfaceColorBaker {
     /// Uses a simple gain-adjustment approach along shared edges.
     private static func applySeamLeveling(
         faces: [Face],
-        bestViews: UnsafeMutableBufferPointer<(color: SIMD3<Float>, weight: Float, frameIndex: Int)>,
+        bestViews: [(color: SIMD3<Float>, weight: Float, frameIndex: Int)],
         surfaces: [BakeSurface]
     ) -> [(color: SIMD3<Float>, weight: Float, frameIndex: Int)] {
-        var result = Array(bestViews)
+        var result = bestViews
         
         // Find adjacent faces (faces of the same surface)
         var surfaceFaces: [[Int]] = Array(repeating: [], count: surfaces.count)

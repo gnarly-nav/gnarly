@@ -6,7 +6,7 @@ import simd
 
 /// Captures ARKit scene reconstruction mesh alongside RoomPlan for server-side texturing.
 /// The LiDAR mesh provides real geometry (clutter, furniture shape) that RoomPlan's idealized boxes don't model.
-final class SceneMeshRecorder {
+final class SceneMeshRecorder: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.gnarly.mapper.scene-mesh", qos: .utility)
     private let lock = NSLock()
     private var meshAnchors: [UUID: ARMeshAnchor] = [:]
@@ -61,8 +61,8 @@ final class SceneMeshRecorder {
             objLines.append("# Mesh anchor \(anchor.identifier)")
             
             for i in 0..<vertices.count {
-                let localVertex = vertices[i]
-                let worldVertex = simd_mul(transform, simd_float4(localVertex.x, localVertex.y, localVertex.z, 1))
+                let localVertex: (Float, Float, Float) = vertices[Int32(i)]
+                let worldVertex = simd_mul(transform, simd_float4(localVertex.0, localVertex.1, localVertex.2, 1))
                 objLines.append("v \(worldVertex.x) \(worldVertex.y) \(worldVertex.z)")
             }
             

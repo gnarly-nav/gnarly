@@ -51,6 +51,8 @@
 		A7C0A11E5F60718293A4C104 /* CognitoSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C0A11E5F60718293A4C103 /* CognitoSession.swift */; };
 		A7C0A11E5F60718293A4C108 /* CognitoSrp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C0A11E5F60718293A4C107 /* CognitoSrp.swift */; };
 		A7C0A11E5F60718293A4C106 /* CognitoOAuthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C0A11E5F60718293A4C105 /* CognitoOAuthTests.swift */; };
+		SCE0E11E5F60718293A4C002 /* SceneMeshRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCE0E11E5F60718293A4C001 /* SceneMeshRecorder.swift */; };
+		MTL0E11E5F60718293A4C002 /* SurfaceColorBakeMetal.swift in Sources */ = {isa = PBXBuildFile; fileRef = MTL0E11E5F60718293A4C001 /* SurfaceColorBakeMetal.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -111,6 +113,8 @@
 		A7C0A11E5F60718293A4C101 /* CognitoOAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CognitoOAuth.swift; sourceTree = "<group>"; };
 		A7C0A11E5F60718293A4C103 /* CognitoSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CognitoSession.swift; sourceTree = "<group>"; };
 		A7C0A11E5F60718293A4C107 /* CognitoSrp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CognitoSrp.swift; sourceTree = "<group>"; };
+		SCE0E11E5F60718293A4C001 /* SceneMeshRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneMeshRecorder.swift; sourceTree = "<group>"; };
+		MTL0E11E5F60718293A4C001 /* SurfaceColorBakeMetal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceColorBakeMetal.swift; sourceTree = "<group>"; };
 		A7C0A11E5F60718293A4C105 /* CognitoOAuthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CognitoOAuthTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -161,9 +165,11 @@
 				C5847A14C25A4071F5D257E0 /* RoomPlanVisibilityGraph.swift */,
 				A1B2C3D4E5F60718293A4B50 /* Scan */,
 				B5295C8E4FB754154E6BD91A /* ScanMinimap.swift */,
+				SCE0E11E5F60718293A4C001 /* SceneMeshRecorder.swift */,
 				835CEE17A191B42BCF3DE668 /* StairZones.swift */,
 				B7C0A11E5F60718293A4C001 /* ColorCoverage.swift */,
 				01E828C023B0F4A206837135 /* SurfaceColorCapture.swift */,
+				MTL0E11E5F60718293A4C001 /* SurfaceColorBakeMetal.swift */,
 				A1B2C3D4E5F60718293A4B60 /* Theme */,
 				A62468E057F7EFF0F18E86F7 /* Firebase */,
 			);
@@ -384,10 +390,12 @@
 				B94D7AD17FE8F7769BC8FE4D /* ScanMinimap.swift in Sources */,
 				A1B2C3D4E5F60718293A4B30 /* ScanPlannerView.swift in Sources */,
 				A1B2C3D4E5F60718293A4B56 /* ScanSessionView.swift in Sources */,
+				SCE0E11E5F60718293A4C002 /* SceneMeshRecorder.swift in Sources */,
 				61770C565FA848405823A808 /* StairZones.swift in Sources */,
 				B7C0A11E5F60718293A4C002 /* ColorCoverage.swift in Sources */,
 				B7C0A11E5F60718293A4C004 /* CoverageOverlay.swift in Sources */,
 				AC610F55C4510B55B4642580 /* SurfaceColorCapture.swift in Sources */,
+				MTL0E11E5F60718293A4C002 /* SurfaceColorBakeMetal.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -5,7 +5,7 @@ import RoomPlan
 import UIKit
 
 @MainActor
-final class MapperViewModel: ObservableObject {
+final class MapperViewModel: NSObject, ObservableObject {
     private let uploadLogger = Logger(subsystem: "com.gnarly.mapper", category: "PackageUpload")
     @Published private(set) var statusText = "Preparing AR session…"
     @Published private(set) var isScanning = false
@@ -84,7 +84,8 @@ final class MapperViewModel: ObservableObject {
         recordedNodes.count
     }
 
-    init() {
+    override init() {
+        super.init()
         let loaded = StairCatalogStore.load()
         catalog = loaded
         zoneConnectionsJSON = loaded.navigatorZoneConnectionsJSON()
@@ -687,12 +688,14 @@ final class MapperViewModel: ObservableObject {
     private func startPathSampling() {
         sampleWalkedPathIfNeeded()
         pathSamplingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            guard let self, self.isScanning else { return }
-            self.sampleWalkedPathIfNeeded()
-            if let frame = self.arSession.currentFrame {
-                self.colorRecorder.consider(frame, session: self.arSession)
-                self.colorFrameCount = self.colorRecorder.count
-                self.refreshCoverageIfNeeded()
+            Task { @MainActor in
+                guard let self, self.isScanning else { return }
+                self.sampleWalkedPathIfNeeded()
+                if let frame = self.arSession.currentFrame {
+                    self.colorRecorder.consider(frame, session: self.arSession)
+                    self.colorFrameCount = self.colorRecorder.count
+                    self.refreshCoverageIfNeeded()
+                }
             }
         }
     }
