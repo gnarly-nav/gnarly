@@ -189,10 +189,16 @@ public partial class IndoorMapOverlay : MonoBehaviour
         Pathfinding.Graph graph,
         Transform sessionTransform,
         Camera camera,
-        SurfaceColors colors = null)
+        SurfaceColors colors = null,
+        TexturedMesh texturedMesh = null)
     {
         Clear();
         surfaceColors = colors;
+        if (texturedMesh?.meshObject != null)
+        {
+            texturedMesh.meshObject.transform.SetParent(sessionTransform, false);
+            texturedMesh.meshObject.layer = MapLayer;
+        }
         sessionSpace = sessionTransform;
         arCamera = camera;
         topDown = compactTopDown;
