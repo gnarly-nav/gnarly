@@ -1,5 +1,5 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Html, Line, OrbitControls, Text } from '@react-three/drei';
+import { Html, Line, OrbitControls, Text, useGLTF } from '@react-three/drei';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { Box3, BoxGeometry, Color, DoubleSide, FrontSide, Matrix4, MeshBasicMaterial, MeshStandardMaterial, PerspectiveCamera, Plane, Shape, ShapeGeometry, SRGBColorSpace, TextureLoader, Vector2, Vector3, type Camera, type Group, type Material, type Raycaster, type Texture } from 'three';
 import type { Graph, ScanFeature, ScanFeatures, SurfaceColorFace, SurfaceColors, ZoneView } from './data';
@@ -247,6 +247,12 @@ function StairTread({ identifier, step, index, opacity }: {
   return <mesh geometry={geometry} material={materials} position={step.center} />;
 }
 
+function TexturedMeshLayer({ meshUrl }: { meshUrl: string }) {
+  const gltf = useGLTF(meshUrl);
+  if (!gltf?.scene) return null;
+  return <primitive object={gltf.scene} />;
+}
+
 function ScannedFloor({ feature, floorId, zoneId, onPick }: { feature: ScanFeature; floorId: string; zoneId?: string; onPick?: (world: Vec3) => void }) {
   const { colors, atlas } = useContext(SurfaceColorContext);
   const faces = colors?.surfaces[feature.identifier];
@@ -356,17 +362,22 @@ function ScannedGeometry({ scan, graph, floor, zoneId, onFloorPick }: { scan: Sc
   const surfaceColors = useMemo(() => ({ colors: scan.colors, atlas }), [scan.colors, atlas]);
   const [showSplat, setShowSplat] = useState(true);
   const hasSplat = Boolean(scan.splat?.splatUrl);
+  const [showMesh, setShowMesh] = useState(false);
+  const hasMesh = Boolean(scan.texturedMesh?.glbUrl);
   
   return <>
     {hasSplat && scan.splat && (
       <GaussianSplatRenderer splat={scan.splat} visible={showSplat} />
+    )}
+    {hasMesh && scan.texturedMesh && (
+      <TexturedMeshRenderer mesh={scan.texturedMesh} visible={showMesh} />
     )}
     <SurfaceColorContext.Provider value={surfaceColors}>
       {scan.floors.filter(visible).map(item => {
         const floorId = graph.floors.find(candidate => candidate.story === item.story)?.id || graph.floors[0]?.id;
         return floorId ? <ScannedFloor key={item.identifier} feature={item} floorId={floorId} zoneId={zoneId} onPick={onFloorPick ? world => onFloorPick(world, floorId) : undefined} /> : null;
       })}
-      <group visible={!showSplat || !hasSplat}>
+      <group visible={(!showSplat || !hasSplat) && (!showMesh || !hasMesh)}>
         {scan.walls.filter(visible).map(item => <Wall key={item.identifier} wall={item} portals={portals.filter(portal => portal.parentIdentifier === item.identifier)} />)}
         {scan.windows.filter(visible).map(item => <FeatureBox key={item.identifier} feature={item} color={SCENE.window} opacity={real ? .6 : .32} />)}
         {scan.doors.filter(visible).filter(item => item.category === 'door-closed').map(item =>
@@ -377,6 +388,21 @@ function ScannedGeometry({ scan, graph, floor, zoneId, onFloorPick }: { scan: Sc
       </group>
     </SurfaceColorContext.Provider>
   </>;
+  return <SurfaceColorContext.Provider value={surfaceColors}>
+    {scan.texturedMesh && <TexturedMeshLayer meshUrl={scan.texturedMesh.meshUrl} />}
+    {scan.floors.filter(visible).map(item => {
+      const floorId = graph.floors.find(candidate => candidate.story === item.story)?.id || graph.floors[0]?.id;
+      return floorId ? <ScannedFloor key={item.identifier} feature={item} floorId={floorId} zoneId={zoneId} onPick={onFloorPick ? world => onFloorPick(world, floorId) : undefined} /> : null;
+    })}
+    {scan.walls.filter(visible).map(item => <Wall key={item.identifier} wall={item} portals={portals.filter(portal => portal.parentIdentifier === item.identifier)} />)}
+    {scan.windows.filter(visible).map(item => <FeatureBox key={item.identifier} feature={item} color={SCENE.window} opacity={real ? .6 : .32} />)}
+    {scan.doors.filter(visible).filter(item => item.category === 'door-closed').map(item =>
+      <FeatureBox key={item.identifier} feature={item} color={SCENE.door} opacity={real ? .96 : .35} />)}
+    {scan.objects.filter(visible).map(item => item.category === 'stairs'
+      ? <StairFlight key={item.identifier} feature={item} opacity={real ? .96 : .8} />
+      : <FeatureBox key={item.identifier} feature={item} color={SCENE.object} opacity={real ? .96 : .8} />)}
+  </SurfaceColorContext.Provider>;
+>>>>>>> origin/main
 }
 
 function GraphFloor({ graph, floor, illustrative, zoneId, onFloorPick }: { graph: Graph; floor: string; illustrative?: boolean; zoneId?:string; onFloorPick?: WorldPick }) {

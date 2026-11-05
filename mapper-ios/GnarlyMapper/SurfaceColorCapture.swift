@@ -574,29 +574,66 @@ enum SurfaceColorBaker {
         let occluders = makeOccluders(surfaces)
         let toLinear = (0 ..< 256).map { srgbToLinear(Float($0) / 255) }
         var usedDepth = false
+        
+        // Try to create Metal projector for GPU acceleration
+        let metalProjector = MetalSurfaceProjector.create()
+        if metalProjector != nil {
+            print("[SurfaceColorBaker] Using Metal GPU acceleration")
+        } else {
+            print("[SurfaceColorBaker] Using CPU fallback (Metal unavailable)")
+        }
 
         for (index, keyframe) in keyframes.enumerated() {
             autoreleasepool {
                 guard let frame = FrameData(keyframe, anchorTransforms: anchorTransforms) else { return }
                 if frame.depth != nil { usedDepth = true }
+                
                 bestViews.withUnsafeMutableBufferPointer { buffer in
                     let target = buffer
-                    DispatchQueue.concurrentPerform(iterations: faces.count) { faceIndex in
-                        projectBestView(
-                            face: faces[faceIndex], 
-                            frame: frame, 
+                    
+                    // Try Metal path first, fall back to CPU if it fails
+                    var usedMetal = false
+                    if let projector = metalProjector {
+                        usedMetal = projector.project(
+                            faces: faces,
+                            frameData: frame,
                             frameIndex: index,
-                            occluders: occluders, 
-                            toLinear: toLinear, 
+                            occluders: occluders,
                             into: target
                         )
                     }
+                    
+                    // CPU fallback
+                    if !usedMetal {
+                        DispatchQueue.concurrentPerform(iterations: faces.count) { faceIndex in
+                            projectBestView(
+                                face: faces[faceIndex], 
+                                frame: frame, 
+                                frameIndex: index,
+                                occluders: occluders, 
+                                toLinear: toLinear, 
+                                into: target
+                            )
+                        }
+                    }
                 }
             }
-            progress(Double(index + 1) / Double(keyframes.count) * 0.9)
+            progress(Double(index + 1) / Double(keyframes.count) * 0.85)
         }
+        
+        // Compute exposure normalization gains from overlapping views
+        progress(0.87)
+        let exposureGains = computeExposureGains(keyframes: keyframes, bestViews: bestViews, faces: faces)
+        
+        // Apply exposure normalization to best views
+        progress(0.90)
+        applyExposureNormalization(bestViews: &bestViews, gains: exposureGains)
+        
+        // Apply seam leveling between adjacent faces
+        progress(0.92)
+        let seamLeveled = applySeamLeveling(faces: faces, bestViews: bestViews, surfaces: surfaces)
 
-        let finished = finish(faces: faces, bestViews: bestViews)
+        let finished = finish(faces: faces, bestViews: seamLeveled)
         progress(0.95)
         guard let atlas = packAtlas(finished) else { return nil }
         progress(1)
@@ -647,7 +684,7 @@ enum SurfaceColorBaker {
 
     // MARK: Faces
 
-    fileprivate struct Face {
+    struct Face {
         let surfaceIndex: Int
         /// Occluder this face belongs to. A step is not blocked by its own tread and riser.
         let occluderID: Int
@@ -722,7 +759,7 @@ enum SurfaceColorBaker {
 
     // MARK: Occlusion without LiDAR depth
 
-    fileprivate struct Occluder {
+    struct Occluder {
         let occluderID: Int
         let center: SIMD3<Float>
         let x: SIMD3<Float>
@@ -814,7 +851,7 @@ enum SurfaceColorBaker {
 
     // MARK: Projection
 
-    fileprivate struct FrameData {
+    struct FrameData {
         let pixels: [UInt8]
         let width: Int
         let height: Int
@@ -1015,7 +1052,7 @@ enum SurfaceColorBaker {
 
     // MARK: Finishing and atlas
 
-    fileprivate struct FinishedFace {
+    struct FinishedFace {
         let face: Face
         /// Linear RGB per texel, holes filled.
         let texels: [SIMD3<Float>]
@@ -1151,5 +1188,296 @@ enum SurfaceColorBaker {
     private static func linearToSRGB(_ l: Float) -> Float {
         let c = max(0, min(1, l))
         return c <= 0.0031308 ? 12.92 * c : 1.055 * pow(c, 1 / 2.4) - 0.055
+    }
+    
+    // MARK: - Exposure Normalization
+    
+    /// Compute per-frame gain factors to normalize exposure across all keyframes.
+    /// Uses a reference frame (median exposure) and solves for relative gains based on overlapping texels.
+    private static func computeExposureGains(
+        keyframes: [ColorKeyframe],
+        bestViews: UnsafeMutableBufferPointer<(color: SIMD3<Float>, weight: Float, frameIndex: Int)>,
+        faces: [Face]
+    ) -> [Float] {
+        guard keyframes.count > 1 else { return [1.0] }
+        
+        // Collect exposure durations to find median (reference frame)
+        let exposures = keyframes.map { $0.exposureDuration }
+        let sortedExposures = exposures.sorted()
+        let medianExposure = sortedExposures[sortedExposures.count / 2]
+        let referenceFrame = exposures.firstIndex(of: medianExposure) ?? 0
+        
+        // Build a graph of overlapping views: which frames see which texels
+        var frameOverlaps: [[Int]] = Array(repeating: [], count: keyframes.count)
+        var texelsPerFrame: [Int] = Array(repeating: 0, count: keyframes.count)
+        
+        for face in faces {
+            for row in 0 ..< face.rows {
+                for column in 0 ..< face.columns {
+                    let texelIndex = face.offset + row * face.columns + column
+                    let view = bestViews[texelIndex]
+                    guard view.weight > 0, view.frameIndex >= 0 else { continue }
+                    texelsPerFrame[view.frameIndex] += 1
+                }
+            }
+        }
+        
+        // Initial gains based on exposure duration relative to reference
+        var gains = keyframes.enumerated().map { index, keyframe -> Float in
+            let ratio = keyframe.exposureDuration / max(0.001, keyframes[referenceFrame].exposureDuration)
+            return 1.0 / max(0.1, min(10.0, ratio))
+        }
+        gains[referenceFrame] = 1.0
+        
+        // Iterative refinement: adjust gains based on brightness differences in overlapping regions
+        // This is a simplified version; full implementation would solve a sparse linear system
+        for iteration in 0 ..< 5 {
+            var newGains = gains
+            var frameBrightness: [Float] = Array(repeating: 0, count: keyframes.count)
+            var frameWeights: [Float] = Array(repeating: 0, count: keyframes.count)
+            
+            // Measure average brightness per frame
+            for face in faces {
+                for row in 0 ..< face.rows {
+                    for column in 0 ..< face.columns {
+                        let texelIndex = face.offset + row * face.columns + column
+                        let view = bestViews[texelIndex]
+                        guard view.weight > 0, view.frameIndex >= 0 else { continue }
+                        let luma = 0.299 * view.color.x + 0.587 * view.color.y + 0.114 * view.color.z
+                        frameBrightness[view.frameIndex] += luma * gains[view.frameIndex]
+                        frameWeights[view.frameIndex] += 1
+                    }
+                }
+            }
+            
+            // Compute target brightness (median of all frames)
+            var validBrightness: [Float] = []
+            for i in 0 ..< keyframes.count where frameWeights[i] > 10 {
+                validBrightness.append(frameBrightness[i] / frameWeights[i])
+            }
+            guard !validBrightness.isEmpty else { break }
+            validBrightness.sort()
+            let targetBrightness = validBrightness[validBrightness.count / 2]
+            
+            // Adjust gains to match target brightness
+            for i in 0 ..< keyframes.count where frameWeights[i] > 10 {
+                let currentBrightness = frameBrightness[i] / frameWeights[i]
+                if currentBrightness > 0.01 {
+                    let adjustment = targetBrightness / currentBrightness
+                    newGains[i] = gains[i] * adjustment
+                    // Clamp to reasonable range
+                    newGains[i] = max(0.2, min(5.0, newGains[i]))
+                }
+            }
+            newGains[referenceFrame] = 1.0
+            
+            gains = newGains
+        }
+        
+        return gains
+    }
+    
+    /// Apply exposure gains to normalize brightness across all views.
+    private static func applyExposureNormalization(
+        bestViews: inout UnsafeMutableBufferPointer<(color: SIMD3<Float>, weight: Float, frameIndex: Int)>,
+        gains: [Float]
+    ) {
+        for index in 0 ..< bestViews.count {
+            let view = bestViews[index]
+            guard view.weight > 0, view.frameIndex >= 0, view.frameIndex < gains.count else { continue }
+            let gain = gains[view.frameIndex]
+            bestViews[index].color = SIMD3<Float>(
+                min(1.0, view.color.x * gain),
+                min(1.0, view.color.y * gain),
+                min(1.0, view.color.z * gain)
+            )
+        }
+    }
+    
+    // MARK: - Seam Leveling
+    
+    /// Apply seam leveling to reduce visible color discontinuities between adjacent faces.
+    /// Uses a simple gain-adjustment approach along shared edges.
+    private static func applySeamLeveling(
+        faces: [Face],
+        bestViews: UnsafeMutableBufferPointer<(color: SIMD3<Float>, weight: Float, frameIndex: Int)>,
+        surfaces: [BakeSurface]
+    ) -> [(color: SIMD3<Float>, weight: Float, frameIndex: Int)] {
+        var result = Array(bestViews)
+        
+        // Find adjacent faces (faces of the same surface)
+        var surfaceFaces: [[Int]] = Array(repeating: [], count: surfaces.count)
+        for (index, face) in faces.enumerated() {
+            surfaceFaces[face.surfaceIndex].append(index)
+        }
+        
+        // For each surface with multiple faces, level seams between them
+        for faceIndices in surfaceFaces where faceIndices.count > 1 {
+            // Level seams between all pairs of faces on this surface
+            for i in 0 ..< faceIndices.count {
+                for j in (i + 1) ..< faceIndices.count {
+                    levelSeamBetween(
+                        faceA: faces[faceIndices[i]],
+                        faceB: faces[faceIndices[j]],
+                        bestViews: &result
+                    )
+                }
+            }
+        }
+        
+        return result
+    }
+    
+    /// Level the seam between two faces by adjusting edge pixels to minimize brightness differences.
+    private static func levelSeamBetween(
+        faceA: Face,
+        faceB: Face,
+        bestViews: inout [(color: SIMD3<Float>, weight: Float, frameIndex: Int)]
+    ) {
+        // Check if faces are adjacent (share an edge)
+        // Simplified: adjust edges of both faces toward each other
+        
+        // Collect edge samples from both faces
+        var edgeSamplesA: [(index: Int, color: SIMD3<Float>)] = []
+        var edgeSamplesB: [(index: Int, color: SIMD3<Float>)] = []
+        
+        // Sample edges of face A
+        for column in 0 ..< faceA.columns {
+            // Top edge
+            let topIndex = faceA.offset + column
+            if bestViews[topIndex].weight > 0 {
+                edgeSamplesA.append((topIndex, bestViews[topIndex].color))
+            }
+            // Bottom edge
+            let bottomIndex = faceA.offset + (faceA.rows - 1) * faceA.columns + column
+            if bestViews[bottomIndex].weight > 0 {
+                edgeSamplesA.append((bottomIndex, bestViews[bottomIndex].color))
+            }
+        }
+        for row in 0 ..< faceA.rows {
+            // Left edge
+            let leftIndex = faceA.offset + row * faceA.columns
+            if bestViews[leftIndex].weight > 0 {
+                edgeSamplesA.append((leftIndex, bestViews[leftIndex].color))
+            }
+            // Right edge
+            let rightIndex = faceA.offset + row * faceA.columns + (faceA.columns - 1)
+            if bestViews[rightIndex].weight > 0 {
+                edgeSamplesA.append((rightIndex, bestViews[rightIndex].color))
+            }
+        }
+        
+        // Sample edges of face B
+        for column in 0 ..< faceB.columns {
+            let topIndex = faceB.offset + column
+            if bestViews[topIndex].weight > 0 {
+                edgeSamplesB.append((topIndex, bestViews[topIndex].color))
+            }
+            let bottomIndex = faceB.offset + (faceB.rows - 1) * faceB.columns + column
+            if bestViews[bottomIndex].weight > 0 {
+                edgeSamplesB.append((bottomIndex, bestViews[bottomIndex].color))
+            }
+        }
+        for row in 0 ..< faceB.rows {
+            let leftIndex = faceB.offset + row * faceB.columns
+            if bestViews[leftIndex].weight > 0 {
+                edgeSamplesB.append((leftIndex, bestViews[leftIndex].color))
+            }
+            let rightIndex = faceB.offset + row * faceB.columns + (faceB.columns - 1)
+            if bestViews[rightIndex].weight > 0 {
+                edgeSamplesB.append((rightIndex, bestViews[rightIndex].color))
+            }
+        }
+        
+        guard !edgeSamplesA.isEmpty, !edgeSamplesB.isEmpty else { return }
+        
+        // Compute average edge brightness for both faces
+        let avgBrightnessA = edgeSamplesA.reduce(Float(0)) { sum, sample in
+            sum + (0.299 * sample.color.x + 0.587 * sample.color.y + 0.114 * sample.color.z)
+        } / Float(edgeSamplesA.count)
+        
+        let avgBrightnessB = edgeSamplesB.reduce(Float(0)) { sum, sample in
+            sum + (0.299 * sample.color.x + 0.587 * sample.color.y + 0.114 * sample.color.z)
+        } / Float(edgeSamplesB.count)
+        
+        guard avgBrightnessA > 0.01, avgBrightnessB > 0.01 else { return }
+        
+        // Compute target brightness (average of both)
+        let targetBrightness = (avgBrightnessA + avgBrightnessB) / 2
+        
+        // Apply gentle gain adjustment to edges (70% toward target, 30% original)
+        let gainA = 0.7 * (targetBrightness / avgBrightnessA) + 0.3
+        let gainB = 0.7 * (targetBrightness / avgBrightnessB) + 0.3
+        
+        // Clamp gains to avoid extreme adjustments
+        let clampedGainA = max(0.85, min(1.15, gainA))
+        let clampedGainB = max(0.85, min(1.15, gainB))
+        
+        // Apply gains to edge pixels with feathering (stronger at edge, weaker inside)
+        let featherWidth = 3
+        
+        // Feather face A edges
+        for row in 0 ..< min(featherWidth, faceA.rows) {
+            let feather = Float(featherWidth - row) / Float(featherWidth)
+            let gain = 1.0 + (clampedGainA - 1.0) * feather
+            for column in 0 ..< faceA.columns {
+                let index = faceA.offset + row * faceA.columns + column
+                applyGain(to: &bestViews[index], gain: gain)
+                
+                let bottomRow = faceA.rows - 1 - row
+                let bottomIndex = faceA.offset + bottomRow * faceA.columns + column
+                applyGain(to: &bestViews[bottomIndex], gain: gain)
+            }
+        }
+        for column in 0 ..< min(featherWidth, faceA.columns) {
+            let feather = Float(featherWidth - column) / Float(featherWidth)
+            let gain = 1.0 + (clampedGainA - 1.0) * feather
+            for row in 0 ..< faceA.rows {
+                let index = faceA.offset + row * faceA.columns + column
+                applyGain(to: &bestViews[index], gain: gain)
+                
+                let rightColumn = faceA.columns - 1 - column
+                let rightIndex = faceA.offset + row * faceA.columns + rightColumn
+                applyGain(to: &bestViews[rightIndex], gain: gain)
+            }
+        }
+        
+        // Feather face B edges
+        for row in 0 ..< min(featherWidth, faceB.rows) {
+            let feather = Float(featherWidth - row) / Float(featherWidth)
+            let gain = 1.0 + (clampedGainB - 1.0) * feather
+            for column in 0 ..< faceB.columns {
+                let index = faceB.offset + row * faceB.columns + column
+                applyGain(to: &bestViews[index], gain: gain)
+                
+                let bottomRow = faceB.rows - 1 - row
+                let bottomIndex = faceB.offset + bottomRow * faceB.columns + column
+                applyGain(to: &bestViews[bottomIndex], gain: gain)
+            }
+        }
+        for column in 0 ..< min(featherWidth, faceB.columns) {
+            let feather = Float(featherWidth - column) / Float(featherWidth)
+            let gain = 1.0 + (clampedGainB - 1.0) * feather
+            for row in 0 ..< faceB.rows {
+                let index = faceB.offset + row * faceB.columns + column
+                applyGain(to: &bestViews[index], gain: gain)
+                
+                let rightColumn = faceB.columns - 1 - column
+                let rightIndex = faceB.offset + row * faceB.columns + rightColumn
+                applyGain(to: &bestViews[rightIndex], gain: gain)
+            }
+        }
+    }
+    
+    private static func applyGain(
+        to view: inout (color: SIMD3<Float>, weight: Float, frameIndex: Int),
+        gain: Float
+    ) {
+        guard view.weight > 0 else { return }
+        view.color = SIMD3<Float>(
+            min(1.0, view.color.x * gain),
+            min(1.0, view.color.y * gain),
+            min(1.0, view.color.z * gain)
+        )
     }
 }

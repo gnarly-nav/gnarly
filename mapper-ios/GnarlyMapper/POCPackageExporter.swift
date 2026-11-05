@@ -14,7 +14,8 @@ enum POCPackageExporter {
         recoveredStairs: [StairVolume] = [],
         recoveredFloors: [FloorSlab] = [],
         surfaceColors: SurfaceColorBakeResult? = nil,
-        colorRecorder: SurfaceColorRecorder? = nil
+        colorRecorder: SurfaceColorRecorder? = nil,
+        meshBundle: URL? = nil
     ) throws -> URL {
         let documentsDirectory = try FileManager.default.url(
             for: .documentDirectory,
@@ -112,6 +113,11 @@ enum POCPackageExporter {
            let transformsData = colorRecorder.exportTransforms(zoneID: safeZoneID, capturedAt: capturedAt) {
             try transformsData.write(to: packageURL.appendingPathComponent("transforms.json"), options: .atomic)
             files.append("transforms.json")
+        }
+        if let meshBundle {
+            let meshBundleDir = packageURL.appendingPathComponent("mesh-bundle", isDirectory: true)
+            try FileManager.default.copyItem(at: meshBundle, to: meshBundleDir)
+            files.append("mesh-bundle/")
         }
         if let stairs, !stairs.stairs.isEmpty {
             files.append("stairs.json")

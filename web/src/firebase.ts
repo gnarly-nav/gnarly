@@ -82,6 +82,7 @@ async function loadSurfaceColors(jsonPath: string, atlasPath: string): Promise<S
   }
 }
 
+<<<<<<< HEAD
 async function loadGaussianSplat(jsonPath: string, dataPath: string): Promise<GaussianSplat | undefined> {
   try {
     const raw = await fetchStorageJSON(jsonPath) as {
@@ -103,6 +104,14 @@ async function loadGaussianSplat(jsonPath: string, dataPath: string): Promise<Ga
       splatCount: raw.splatCount,
       bounds: raw.bounds,
     };
+=======
+/** Optional textured mesh; a zone without one falls back to surface colors or default palette. */
+async function loadTexturedMesh(meshPath: string): Promise<string | undefined> {
+  try {
+    const response = await fetchStorage(meshPath);
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+>>>>>>> origin/main
   } catch {
     return undefined;
   }
@@ -190,7 +199,16 @@ export async function loadBuilding(input: Building): Promise<Building> {
       const splat = scanResult.scan
         ? await loadGaussianSplat(zone.gaussianSplatPath || zoneBase + '/gaussian-splat.json', zone.gaussianSplatDataPath || zoneBase + '/gaussian-splat.spz')
         : undefined;
-      const scan = scanResult.scan ? { ...scanResult.scan, colors, splat } : scanResult.scan;
+      const texturedMeshUrl = scanResult.scan
+        ? await loadTexturedMesh(zone.texturedMeshPath || zoneBase + '/textured-mesh.glb')
+        : undefined;
+      const texturedMesh = texturedMeshUrl ? { meshUrl: texturedMeshUrl } : undefined;
+      let scan = scanResult.scan;
+      if (scan) {
+        if (colors) scan = { ...scan, colors };
+        if (splat) scan = { ...scan, splat };
+        if (texturedMesh) scan = { ...scan, texturedMesh };
+      }
       let rawScanStatus = '';
       if (!scan) {
         const rawPath = zone.scanJsonPath || storageBase + '/zones/' + item.id + '/scan.json';

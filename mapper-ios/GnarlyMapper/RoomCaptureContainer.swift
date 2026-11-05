@@ -20,6 +20,11 @@ struct RoomCaptureContainer: UIViewRepresentable {
             configuration.frameSemantics = .sceneDepth
         }
         
+        // Enable scene reconstruction mesh for textured mesh generation
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+            configuration.sceneReconstruction = .mesh
+        }
+        
         mapper.arSession.run(configuration)
 
         let view = RoomCaptureView(frame: .zero, arSession: mapper.arSession)
