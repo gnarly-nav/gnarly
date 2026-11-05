@@ -404,6 +404,15 @@ export function normalizeGraph(raw: unknown): Graph {
   };
 }
 
+async function loadTexturedMesh(meshUrl: string | undefined): Promise<string | undefined> {
+  if (!meshUrl) return undefined;
+  try {
+    return URL.createObjectURL(await (await fetchUrl(meshUrl)).blob());
+  } catch {
+    return undefined;
+  }
+}
+
 async function loadScan(url: string | undefined): Promise<{ scan?: ScanFeatures; error?: string }> {
   if (!url) return { error: 'No scan path' };
   try {
@@ -462,7 +471,11 @@ export async function loadBuilding(input: Building): Promise<Building> {
       const colorsFile = fileNamed(item.files, 'surface-colors.json');
       const atlasFile = fileNamed(item.files, 'surface-colors.jpg');
       const colors = scanResult.scan && colorsFile ? await loadSurfaceColors(colorsFile.url, atlasFile?.url) : undefined;
-      const scan = scanResult.scan && colors ? { ...scanResult.scan, colors } : scanResult.scan;
+      const meshFile = fileNamed(item.files, 'textured-mesh.glb');
+      const texturedMeshUrl = scanResult.scan ? await loadTexturedMesh(meshFile?.url) : undefined;
+      let scan = scanResult.scan;
+      if (scan && colors) scan = { ...scan, colors };
+      if (scan && texturedMeshUrl) scan = { ...scan, texturedMesh: { meshUrl: texturedMeshUrl } };
       const raw = fileNamed(item.files, 'scan.json');
       const rawScanStatus = scan ? '' : raw ? ' Raw scan.json exists.' : ' Raw scan.json is also missing.';
       zones.push({

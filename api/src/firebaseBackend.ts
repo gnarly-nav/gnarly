@@ -203,6 +203,8 @@ class FirestoreMetadata implements MetadataStore {
           structurePath: zone.structurePath,
           surfaceColorsPath: zone.surfaceColorsPath,
           surfaceColorAtlasPath: zone.surfaceColorAtlasPath,
+          texturedMeshPath: zone.texturedMeshPath,
+          texturedMeshMetadataPath: zone.texturedMeshMetadataPath,
           relocalizationHint: zone.relocalizationHint ?? '',
           startNodeId: zone.startNodeId ?? '',
         }));
@@ -337,6 +339,8 @@ function mapZone(id: string, data: DocumentData): ZoneRecord {
     structurePath: text('structurePath'),
     surfaceColorsPath: text('surfaceColorsPath'),
     surfaceColorAtlasPath: text('surfaceColorAtlasPath'),
+    texturedMeshPath: text('texturedMeshPath'),
+    texturedMeshMetadataPath: text('texturedMeshMetadataPath'),
     relocalizationHint: text('relocalizationHint'),
     startNodeId: text('startNodeId'),
     webGraphRevision: text('webGraphRevision'),

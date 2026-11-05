@@ -31,6 +31,7 @@ import {
 } from './model.ts';
 import { buildingData, parseRecordPath, rateKey, rateWindow, type CounterStore, type MetadataStore, type ObjectStore } from './store.ts';
 import { validatePackageObject } from './validatePackage.ts';
+import { type TexturingQueue } from './texturingQueue.ts';
 
 export type Deps = {
   now: () => Date;
@@ -39,6 +40,7 @@ export type Deps = {
   objects: ObjectStore;
   metadata: MetadataStore;
   counters: CounterStore;
+  texturingQueue?: TexturingQueue;
   quotas?: Quotas;
   uploadTtlMs?: number;
   downloadTtlMs?: number;
@@ -228,6 +230,21 @@ export class PublishApi {
 
     const write = this.commitWrite(publish);
     await this.deps.metadata.commit(write);
+    
+    // Trigger texturing jobs for zones with mesh-bundle
+    if (this.deps.texturingQueue) {
+      for (const zone of publish.zones) {
+        const hasMeshBundle = publish.files.some(file => file.zoneId === zone.zoneId && file.path.includes('mesh-bundle'));
+        if (hasMeshBundle) {
+          try {
+            await this.deps.texturingQueue.enqueue(id, publish.versionId, zone.zoneId);
+          } catch (error) {
+            console.error(`[CommitPublish] Failed to enqueue texturing job for zone ${zone.zoneId}:`, error);
+          }
+        }
+      }
+    }
+    
     return { buildingId: id, versionId: publish.versionId, activeVersion: publish.versionId, committed: true };
   }
 
@@ -397,6 +414,8 @@ export class PublishApi {
         worldMapPath: uploaded.get(`${zone.zoneId}:worldmap.bin`),
         surfaceColorsPath: uploaded.get(`${zone.zoneId}:surface-colors.json`),
         surfaceColorAtlasPath: uploaded.get(`${zone.zoneId}:surface-colors.jpg`),
+        texturedMeshPath: uploaded.get(`${zone.zoneId}:textured-mesh.glb`),
+        texturedMeshMetadataPath: uploaded.get(`${zone.zoneId}:textured-mesh.json`),
       });
     }
     const floors = new Map(publish.carry.floors.map(floor => [floor.id, floor]));
@@ -453,6 +472,8 @@ export class PublishApi {
       ['worldmap.bin', zone.worldMapPath, true],
       ['surface-colors.json', zone.surfaceColorsPath, false],
       ['surface-colors.jpg', zone.surfaceColorAtlasPath, false],
+      ['textured-mesh.glb', zone.texturedMeshPath, false],
+      ['textured-mesh.json', zone.texturedMeshMetadataPath, false],
     ] as const;
     const signed = [];
     for (const [name, stored, required] of files) {

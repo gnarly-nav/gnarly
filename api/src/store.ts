@@ -327,7 +327,7 @@ function applyVersion(version: VersionRecord, after: Record<string, unknown>) {
 function applyZone(zone: ZoneRecord, after: Record<string, unknown>) {
   if (typeof after.name === 'string') zone.name = after.name;
   if (typeof after.floorId === 'string') zone.floorId = after.floorId;
-  for (const field of ['worldMapPath', 'buildingJsonPath', 'scanJsonPath', 'scanFeaturesPath', 'structurePath', 'surfaceColorsPath', 'surfaceColorAtlasPath', 'relocalizationHint', 'startNodeId', 'webGraphRevision'] as const) {
+  for (const field of ['worldMapPath', 'buildingJsonPath', 'scanJsonPath', 'scanFeaturesPath', 'structurePath', 'surfaceColorsPath', 'surfaceColorAtlasPath', 'texturedMeshPath', 'texturedMeshMetadataPath', 'relocalizationHint', 'startNodeId', 'webGraphRevision'] as const) {
     if (typeof after[field] === 'string') zone[field] = after[field] as string;
   }
 }

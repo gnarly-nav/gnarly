@@ -42,6 +42,8 @@ export type ZoneRecord = {
   structurePath?: string;
   surfaceColorsPath?: string;
   surfaceColorAtlasPath?: string;
+  texturedMeshPath?: string;
+  texturedMeshMetadataPath?: string;
   relocalizationHint?: string;
   startNodeId?: string;
   webGraphRevision?: string;
@@ -161,11 +163,13 @@ export const FILE_LIMITS: Record<string, number> = {
   'building-layout.json': 1024 * 1024,
   'surface-colors.json': 8 * 1024 * 1024,
   'surface-colors.jpg': 25 * 1024 * 1024,
+  'textured-mesh.glb': 150 * 1024 * 1024,
+  'textured-mesh.json': 512 * 1024,
 };
 
 export const TOTAL_LIMIT = 250 * 1024 * 1024;
 export const ZONE_REQUIRED = ['building.json', 'scan.json', 'scan-features.json', 'structure.usdz', 'worldmap.bin'];
-export const ZONE_OPTIONAL = ['surface-colors.json', 'surface-colors.jpg'];
+export const ZONE_OPTIONAL = ['surface-colors.json', 'surface-colors.jpg', 'textured-mesh.glb', 'textured-mesh.json'];
 export const BUILDING_FILES = ['zone-connections.json', 'building-layout.json'];
 export const UPLOAD_TTL_MS = 15 * 60 * 1000;
 export const DOWNLOAD_TTL_MS = 5 * 60 * 1000;
@@ -182,6 +186,8 @@ const CONTENT_TYPES: Record<string, readonly string[]> = {
   'building-layout.json': ['application/json'],
   'surface-colors.json': ['application/json'],
   'surface-colors.jpg': ['image/jpeg'],
+  'textured-mesh.glb': ['model/gltf-binary', 'application/octet-stream'],
+  'textured-mesh.json': ['application/json'],
 };
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
@@ -220,7 +226,7 @@ export function objectPath(buildingId: string, versionId: string, name: string, 
 }
 
 const PATH_RULES = [
-  /^buildings\/([^/]+)\/([^/]+)\/zones\/([^/]+)\/(building\.json|scan\.json|scan-features\.json|structure\.usdz|surface-colors\.json|surface-colors\.jpg)$/,
+  /^buildings\/([^/]+)\/([^/]+)\/zones\/([^/]+)\/(building\.json|scan\.json|scan-features\.json|structure\.usdz|surface-colors\.json|surface-colors\.jpg|textured-mesh\.glb|textured-mesh\.json)$/,
   /^buildings\/([^/]+)\/([^/]+)\/zones\/([^/]+)\/graph-edits\/([^/]+\.json)$/,
   /^buildings\/([^/]+)\/([^/]+)\/graph-edits\/([^/]+\.json)$/,
   /^buildings\/([^/]+)\/([^/]+)\/worldmaps\/([^/]+)\.bin$/,

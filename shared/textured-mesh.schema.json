@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gnarly textured mesh metadata",
+  "description": "Metadata for one zone's textured ARKit scene reconstruction mesh. The mesh itself is the sibling GLB file named by `mesh`. This provides a real-geometry visual layer baked from captured keyframes, complementing RoomPlan's idealized box-based navigation geometry.",
+  "type": "object",
+  "required": ["schemaVersion", "zoneId", "mesh", "coordinateSystem"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "zoneId": { "type": "string", "minLength": 1 },
+    "coordinateSystem": { 
+      "const": "arkit-world-meters",
+      "description": "Mesh vertices and textures are in the same ARKit world frame as scan-features.json and building.json."
+    },
+    "mesh": { 
+      "type": "string", 
+      "description": "GLB file name, normally textured-mesh.glb. Contains the ARKit scene reconstruction mesh with texture(s) baked from captured keyframes." 
+    },
+    "capturedAt": { 
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when the mesh and keyframes were captured."
+    },
+    "keyframeCount": { 
+      "type": "integer", 
+      "minimum": 0,
+      "description": "Number of keyframe images used to texture the mesh."
+    },
+    "meshTriangleCount": { 
+      "type": "integer", 
+      "minimum": 0,
+      "description": "Number of triangles in the scene reconstruction mesh."
+    },
+    "textureFormat": {
+      "enum": ["ktx2-basis-uastc", "ktx2-basis-etc1s", "jpeg", "png"],
+      "description": "Texture compression format used in the GLB. KTX2/Basis preferred for web/Unity compatibility and smaller size."
+    },
+    "textureResolution": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Maximum texture dimension in pixels (for the largest texture if multiple)."
+    },
+    "texturingMethod": {
+      "enum": ["mvs-texturing", "openmvs", "manual"],
+      "description": "Algorithm used to select views and blend textures: mvs-texturing (Waechter MRF), OpenMVS TextureMesh, or manual/other."
+    },
+    "usedDepthOcclusion": { 
+      "type": "boolean", 
+      "description": "True when LiDAR depth was used during texturing to handle occlusions."
+    },
+    "notes": { "type": "string" }
+  }
+}

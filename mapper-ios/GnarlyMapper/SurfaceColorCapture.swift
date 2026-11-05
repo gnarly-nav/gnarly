@@ -17,11 +17,21 @@ struct ColorKeyframe: Sendable {
     let focal: SIMD2<Float>
     let principal: SIMD2<Float>
     /// ARKit camera-to-world transform (sensor orientation, matching the stored image).
+    /// This is the initial capture transform; anchorID tracks drift corrections.
     let cameraTransform: simd_float4x4
+    /// Anchor UUID tracking this frame's pose; updated by ARKit on loop closure.
+    let anchorID: UUID?
     /// LiDAR depth in meters, row-major Float32, aligned with the image at lower resolution.
     let depthURL: URL?
     let depthWidth: Int
     let depthHeight: Int
+    /// LiDAR depth confidence map (0=low, 1=medium, 2=high), row-major UInt8, same size as depth.
+    let depthConfidenceURL: URL?
+    /// Exposure metadata for normalization across frames.
+    let exposureDuration: Float
+    let exposureOffset: Float
+    /// Laplacian variance sharpness score on downsampled luma; higher is sharper.
+    let sharpness: Float
 }
 
 /// Saves sharp, well-spaced camera frames while RoomPlan scans so walls, floors, doors, and furniture
@@ -30,7 +40,7 @@ final class SurfaceColorRecorder {
     // Large floors need more evenly spaced camera coverage for color baking. This affects only
     // optional surface-color capture, not RoomPlan's separate scene-size limit.
     static let maxKeyframes = 960
-    private static let storedWidth: CGFloat = 1280
+    private static let storedWidth: CGFloat = 1920  // Increased from 1280 for better quality
 
     private let queue = DispatchQueue(label: "com.gnarly.mapper.surface-color-keyframes", qos: .utility)
     private let context = CIContext()
@@ -38,6 +48,7 @@ final class SurfaceColorRecorder {
     private var frames: [ColorKeyframe] = []
     private var generation = 0
     private var directory = SurfaceColorRecorder.makeDirectory()
+    private var anchors: [UUID: ARAnchor] = [:]  // Track pose corrections
 
     // Main-thread state.
     private var lastKeyframePose: simd_float4x4?
@@ -52,6 +63,19 @@ final class SurfaceColorRecorder {
     }
 
     var count: Int { keyframes.count }
+    
+    /// Retrieve updated anchor transforms after loop closure, keyed by anchor ID.
+    func getAnchorTransforms(_ session: ARSession) -> [UUID: simd_float4x4] {
+        lock.lock()
+        defer { lock.unlock() }
+        var transforms: [UUID: simd_float4x4] = [:]
+        for (id, _) in anchors {
+            if let anchor = session.anchors.first(where: { $0.identifier == id }) {
+                transforms[id] = anchor.transform
+            }
+        }
+        return transforms
+    }
 
     /// Pose and lens for each saved photo, without the JPEG. Used to estimate splat coverage while scanning.
     var coverageCameras: [CoverageCamera] {
@@ -72,6 +96,7 @@ final class SurfaceColorRecorder {
         lock.lock()
         frames = []
         generation += 1
+        anchors.removeAll()
         lock.unlock()
         directory = Self.makeDirectory()
         lastKeyframePose = nil
@@ -81,7 +106,7 @@ final class SurfaceColorRecorder {
     }
 
     /// Call on the main thread with the session's current frame, a few times per second while scanning.
-    func consider(_ frame: ARFrame) {
+    func consider(_ frame: ARFrame, session: ARSession) {
         let camera = frame.camera
         let pose = camera.transform
         defer { previousPose = pose }
@@ -106,16 +131,30 @@ final class SurfaceColorRecorder {
         lastKeyframePose = pose
         lastKeyframeTime = frame.timestamp
         pending += 1
+        
+        // Create an anchor to track pose corrections from loop closure
+        let anchor = ARAnchor(transform: pose)
+        session.add(anchor: anchor)
+        lock.lock()
+        anchors[anchor.identifier] = anchor
+        lock.unlock()
+        
         let image = frame.capturedImage
         let depth = (frame.smoothedSceneDepth ?? frame.sceneDepth)?.depthMap
+        let depthConfidence = (frame.smoothedSceneDepth ?? frame.sceneDepth)?.confidenceMap
         let resolution = camera.imageResolution
         let intrinsics = camera.intrinsics
+        let exposureDuration = Float(camera.exposureDuration)
+        let exposureOffset = camera.exposureOffset
         let directory = self.directory
         queue.async { [weak self] in
             guard let self else { return }
             let keyframe = self.encode(
-                image: image, depth: depth, resolution: resolution, intrinsics: intrinsics,
-                pose: pose, directory: directory, index: index)
+                image: image, depth: depth, depthConfidence: depthConfidence,
+                resolution: resolution, intrinsics: intrinsics,
+                pose: pose, anchorID: anchor.identifier, 
+                exposureDuration: exposureDuration, exposureOffset: exposureOffset,
+                directory: directory, index: index)
             self.lock.lock()
             if let keyframe, currentGeneration == self.generation { self.frames.append(keyframe) }
             self.lock.unlock()
@@ -126,9 +165,13 @@ final class SurfaceColorRecorder {
     private func encode(
         image: CVPixelBuffer,
         depth: CVPixelBuffer?,
+        depthConfidence: CVPixelBuffer?,
         resolution: CGSize,
         intrinsics: simd_float3x3,
         pose: simd_float4x4,
+        anchorID: UUID,
+        exposureDuration: Float,
+        exposureOffset: Float,
         directory: URL,
         index: Int
     ) -> ColorKeyframe? {
@@ -138,14 +181,18 @@ final class SurfaceColorRecorder {
         let scaled = CIImage(cvPixelBuffer: image)
             .applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1.0])
             .cropped(to: CGRect(x: 0, y: 0, width: width, height: height))
-        let quality = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
+        
+        // Compute sharpness score before encoding
+        let sharpness = Self.computeSharpness(image: image)
+        
+        // Use HEIC for better quality at the same size
+        let imageURL = directory.appendingPathComponent(String(format: "frame-%04d.heic", index))
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
-              let jpeg = context.jpegRepresentation(of: scaled, colorSpace: colorSpace, options: [quality: 0.9]) else {
+              let heicData = context.heifRepresentation(of: scaled, format: .RGBA8, colorSpace: colorSpace, options: [:]) else {
             return nil
         }
-        let imageURL = directory.appendingPathComponent(String(format: "frame-%04d.jpg", index))
         do {
-            try jpeg.write(to: imageURL)
+            try heicData.write(to: imageURL)
         } catch {
             return nil
         }
@@ -157,6 +204,12 @@ final class SurfaceColorRecorder {
             let url = directory.appendingPathComponent(String(format: "frame-%04d.depth", index))
             if (try? data.write(to: url)) != nil { depthURL = url }
         }
+        
+        var depthConfidenceURL: URL?
+        if let depthConfidence, let data = Self.confidenceData(depthConfidence) {
+            let url = directory.appendingPathComponent(String(format: "frame-%04d.conf", index))
+            if (try? data.write(to: url)) != nil { depthConfidenceURL = url }
+        }
 
         let s = Float(scale)
         return ColorKeyframe(
@@ -166,9 +219,14 @@ final class SurfaceColorRecorder {
             focal: SIMD2<Float>(intrinsics[0][0] * s, intrinsics[1][1] * s),
             principal: SIMD2<Float>(intrinsics[2][0] * s, intrinsics[2][1] * s),
             cameraTransform: pose,
+            anchorID: anchorID,
             depthURL: depthURL,
             depthWidth: depthURL == nil ? 0 : depthWidth,
-            depthHeight: depthURL == nil ? 0 : depthHeight
+            depthHeight: depthURL == nil ? 0 : depthHeight,
+            depthConfidenceURL: depthConfidenceURL,
+            exposureDuration: exposureDuration,
+            exposureOffset: exposureOffset,
+            sharpness: sharpness
         )
     }
 
@@ -185,6 +243,74 @@ final class SurfaceColorRecorder {
             data.append(base.advanced(by: row * rowBytes).assumingMemoryBound(to: UInt8.self), count: width * 4)
         }
         return data
+    }
+    
+    private static func confidenceData(_ buffer: CVPixelBuffer) -> Data? {
+        guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_OneComponent8 else { return nil }
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+        var data = Data(capacity: width * height)
+        for row in 0 ..< height {
+            data.append(base.advanced(by: row * rowBytes).assumingMemoryBound(to: UInt8.self), count: width)
+        }
+        return data
+    }
+    
+    /// Laplacian variance sharpness score on downsampled luma; higher is sharper.
+    private static func computeSharpness(image: CVPixelBuffer) -> Float {
+        let width = CVPixelBufferGetWidth(image)
+        let height = CVPixelBufferGetHeight(image)
+        guard width > 2, height > 2 else { return 0 }
+        
+        CVPixelBufferLockBaseAddress(image, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(image) else { return 0 }
+        
+        let rowBytes = CVPixelBufferGetBytesPerRow(image)
+        let pixelFormat = CVPixelBufferGetPixelFormatType(image)
+        
+        // Sample center region at reduced resolution for speed
+        let sampleWidth = min(width / 4, 160)
+        let sampleHeight = min(height / 4, 120)
+        let startX = (width - sampleWidth * 4) / 2
+        let startY = (height - sampleHeight * 4) / 2
+        
+        var laplacianSum: Float = 0
+        var count = 0
+        
+        for sy in 1..<(sampleHeight - 1) {
+            let y = startY + sy * 4
+            for sx in 1..<(sampleWidth - 1) {
+                let x = startX + sx * 4
+                
+                // Sample luma at (x, y) and neighbors
+                func luma(dx: Int, dy: Int) -> Float {
+                    let row = y + dy
+                    let col = x + dx
+                    let offset = row * rowBytes + col * 4  // Assuming BGRA/RGBA format
+                    let pixel = base.advanced(by: offset).assumingMemoryBound(to: UInt8.self)
+                    // Y = 0.299*R + 0.587*G + 0.114*B (ITU-R BT.601)
+                    return Float(pixel[2]) * 0.299 + Float(pixel[1]) * 0.587 + Float(pixel[0]) * 0.114
+                }
+                
+                let center = luma(dx: 0, dy: 0)
+                let top = luma(dx: 0, dy: -1)
+                let bottom = luma(dx: 0, dy: 1)
+                let left = luma(dx: -1, dy: 0)
+                let right = luma(dx: 1, dy: 0)
+                
+                // Laplacian: center * 4 - (top + bottom + left + right)
+                let lap = abs(center * 4 - (top + bottom + left + right))
+                laplacianSum += lap * lap
+                count += 1
+            }
+        }
+        
+        return count > 0 ? laplacianSum / Float(count) : 0
     }
 
     private static func makeDirectory() -> URL {
@@ -346,17 +472,18 @@ struct SurfaceColorBakeResult: Sendable {
 // MARK: - Baking
 
 /// Projects the recorded photos onto every visible face of the final RoomPlan model, rejecting views that are
-/// blocked (LiDAR depth, or the room geometry when depth is unavailable), and blends the best views per texel.
+/// blocked (LiDAR depth, or the room geometry when depth is unavailable), and selects the best view per texel.
 enum SurfaceColorBaker {
-    static let maxTexels = 3_000_000
-    static let minTexelMeters: Float = 0.015
-    static let maxFaceTexels = 1024
+    static let maxTexels = 4_000_000  // Increased from 3M for finer detail
+    static let minTexelMeters: Float = 0.010  // Reduced from 1.5cm to 1.0cm for sharper textures
+    static let maxFaceTexels = 1536  // Increased from 1024 for large walls
     static let maxDistance: Float = 7
     static let atlasPadding = 4
 
     static func bake(
         surfaces: [BakeSurface],
         keyframes: [ColorKeyframe],
+        anchorTransforms: [UUID: simd_float4x4],
         zoneID: String,
         capturedAt: String,
         progress: @escaping @Sendable (Double) -> Void
@@ -365,26 +492,40 @@ enum SurfaceColorBaker {
         let (faces, texelMeters) = makeFaces(surfaces)
         guard let last = faces.last else { return nil }
         let texelCount = last.offset + last.columns * last.rows
-        var accumulation = [SIMD4<Float>](repeating: .zero, count: texelCount)
+        
+        // Changed from weighted average to best-view selection
+        // Store (color, weight, frame index) for each texel to pick the best view
+        var bestViews = [(color: SIMD3<Float>, weight: Float, frameIndex: Int)](
+            repeating: (SIMD3<Float>.zero, 0, -1), 
+            count: texelCount
+        )
+        
         let occluders = makeOccluders(surfaces)
         let toLinear = (0 ..< 256).map { srgbToLinear(Float($0) / 255) }
         var usedDepth = false
 
         for (index, keyframe) in keyframes.enumerated() {
             autoreleasepool {
-                guard let frame = FrameData(keyframe) else { return }
+                guard let frame = FrameData(keyframe, anchorTransforms: anchorTransforms) else { return }
                 if frame.depth != nil { usedDepth = true }
-                accumulation.withUnsafeMutableBufferPointer { buffer in
+                bestViews.withUnsafeMutableBufferPointer { buffer in
                     let target = buffer
                     DispatchQueue.concurrentPerform(iterations: faces.count) { faceIndex in
-                        project(face: faces[faceIndex], frame: frame, occluders: occluders, toLinear: toLinear, into: target)
+                        projectBestView(
+                            face: faces[faceIndex], 
+                            frame: frame, 
+                            frameIndex: index,
+                            occluders: occluders, 
+                            toLinear: toLinear, 
+                            into: target
+                        )
                     }
                 }
             }
             progress(Double(index + 1) / Double(keyframes.count) * 0.9)
         }
 
-        let finished = finish(faces: faces, accumulation: accumulation)
+        let finished = finish(faces: faces, bestViews: bestViews)
         progress(0.95)
         guard let atlas = packAtlas(finished) else { return nil }
         progress(1)
@@ -607,14 +748,18 @@ enum SurfaceColorBaker {
         let width: Int
         let height: Int
         let depth: [Float]?
+        let depthConfidence: [UInt8]?
         let depthWidth: Int
         let depthHeight: Int
         let cameraPosition: SIMD3<Float>
         let worldToCamera: simd_float4x4
         let focal: SIMD2<Float>
         let principal: SIMD2<Float>
+        let exposureDuration: Float
+        let exposureOffset: Float
+        let sharpness: Float
 
-        init?(_ keyframe: ColorKeyframe) {
+        init?(_ keyframe: ColorKeyframe, anchorTransforms: [UUID: simd_float4x4]) {
             guard let source = CGImageSourceCreateWithURL(keyframe.imageURL as CFURL, nil),
                   let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
                   let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
@@ -640,10 +785,19 @@ enum SurfaceColorBaker {
                 depth = data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
             }
             self.depth = depth
+            
+            var depthConfidence: [UInt8]?
+            if let url = keyframe.depthConfidenceURL, let data = try? Data(contentsOf: url),
+               data.count == keyframe.depthWidth * keyframe.depthHeight {
+                depthConfidence = Array(data)
+            }
+            self.depthConfidence = depthConfidence
+            
             depthWidth = keyframe.depthWidth
             depthHeight = keyframe.depthHeight
 
-            let t = keyframe.cameraTransform
+            // Use updated anchor transform if available (tracks loop closure corrections)
+            let t = keyframe.anchorID.flatMap { anchorTransforms[$0] } ?? keyframe.cameraTransform
             cameraPosition = SIMD3<Float>(t.columns.3.x, t.columns.3.y, t.columns.3.z)
             worldToCamera = t.inverse
             // Intrinsics are for the stored image size, which may differ by rounding from the recorded size.
@@ -651,15 +805,19 @@ enum SurfaceColorBaker {
             let sy = Float(height) / Float(max(1, keyframe.height))
             focal = SIMD2<Float>(keyframe.focal.x * sx, keyframe.focal.y * sy)
             principal = SIMD2<Float>(keyframe.principal.x * sx, keyframe.principal.y * sy)
+            exposureDuration = keyframe.exposureDuration
+            exposureOffset = keyframe.exposureOffset
+            sharpness = keyframe.sharpness
         }
     }
 
-    private static func project(
+    private static func projectBestView(
         face: Face,
         frame: FrameData,
+        frameIndex: Int,
         occluders: [Occluder],
         toLinear: [Float],
-        into accumulation: UnsafeMutableBufferPointer<SIMD4<Float>>
+        into bestViews: UnsafeMutableBufferPointer<(color: SIMD3<Float>, weight: Float, frameIndex: Int)>
     ) {
         let camera = frame.cameraPosition
         let toCamera = camera - face.center
@@ -693,13 +851,18 @@ enum SurfaceColorBaker {
                 let py = frame.focal.y * -local.y / z + frame.principal.y
                 guard px >= 1, py >= 1, px < width - 2, py < height - 2 else { continue }
 
-                if let depth = frame.depth {
+                if let depth = frame.depth, let confidence = frame.depthConfidence {
                     let dx = min(frame.depthWidth - 1, Int(px * Float(frame.depthWidth) / width))
                     let dy = min(frame.depthHeight - 1, Int(py * Float(frame.depthHeight) / height))
-                    let measured = depth[dy * frame.depthWidth + dx]
-                    if measured.isFinite, measured > 0 {
+                    let depthIndex = dy * frame.depthWidth + dx
+                    let measured = depth[depthIndex]
+                    let conf = confidence[depthIndex]
+                    
+                    // Only use high-confidence depth (2 = high, 1 = medium, 0 = low)
+                    if measured.isFinite, measured > 0, conf >= 2 {
                         if measured < z - max(0.05, 0.03 * z) { continue }   // something stands in front
-                        if measured > z + max(0.25, 0.1 * z) { continue }    // the surface isn't really there
+                        // Tightened tolerance: was +25cm/10%, now +8cm/4% to reduce off-box clutter
+                        if measured > z + max(0.08, 0.04 * z) { continue }   // the surface isn't really there
                     }
                 } else if blockers.contains(where: { $0.hits(origin: camera, direction: ray / distance, maxT: distance - 0.12) }) {
                     continue
@@ -708,9 +871,17 @@ enum SurfaceColorBaker {
                 let color = sample(frame, x: px, y: py, toLinear: toLinear)
                 let edge = min(1, min(min(px, width - px), min(py, height - py)) / edgeScale)
                 let base = cosine * cosine / max(distance * distance, 0.25) * (0.25 + 0.75 * edge)
-                // Squaring favors the sharpest, most head-on views while still averaging out noise.
-                let weight = base * base
-                accumulation[face.offset + row * face.columns + column] += SIMD4<Float>(color * weight, weight)
+                
+                // Weight includes sharpness: prefer sharp, head-on, close views
+                // Sharpness is variance of Laplacian, typically 0-10000+; normalize to ~0-1 range
+                let sharpnessBoost = 1.0 + min(1.0, frame.sharpness / 2000.0)
+                let weight = base * base * sharpnessBoost
+                
+                let texelIndex = face.offset + row * face.columns + column
+                // Best-view selection: keep only the highest-weight view per texel
+                if weight > bestViews[texelIndex].weight {
+                    bestViews[texelIndex] = (color, weight, frameIndex)
+                }
             }
         }
     }
@@ -782,7 +953,7 @@ enum SurfaceColorBaker {
         let seenTexels: Int
     }
 
-    private static func finish(faces: [Face], accumulation: [SIMD4<Float>]) -> [FinishedFace] {
+    private static func finish(faces: [Face], bestViews: [(color: SIMD3<Float>, weight: Float, frameIndex: Int)]) -> [FinishedFace] {
         faces.map { face in
             let count = face.columns * face.rows
             var texels = [SIMD3<Float>](repeating: .zero, count: count)
@@ -790,12 +961,11 @@ enum SurfaceColorBaker {
             var sum = SIMD3<Float>.zero
             var seen = 0
             for index in 0 ..< count {
-                let value = accumulation[face.offset + index]
-                guard value.w > 0 else { continue }
-                let color = SIMD3<Float>(value.x, value.y, value.z) / value.w
-                texels[index] = color
+                let view = bestViews[face.offset + index]
+                guard view.weight > 0 else { continue }
+                texels[index] = view.color
                 filled[index] = true
-                sum += color
+                sum += view.color
                 seen += 1
             }
             guard seen > 0 else {
@@ -851,7 +1021,8 @@ enum SurfaceColorBaker {
             .sorted { $0.face.rows > $1.face.rows }
         let padding = atlasPadding
         let area = textured.reduce(0) { $0 + ($1.face.columns + 2 * padding) * ($1.face.rows + 2 * padding) }
-        let width = area > 2048 * 1400 ? 4096 : 2048
+        // Increased atlas size threshold for higher resolution
+        let width = area > 4096 * 1400 ? 8192 : area > 2048 * 1400 ? 4096 : 2048
 
         var rects = [Int: [Int]]()
         var x = 0
