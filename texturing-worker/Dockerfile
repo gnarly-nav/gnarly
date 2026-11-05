@@ -27,7 +27,9 @@ RUN apt-get update && apt-get install -y \
 RUN pip3 install --no-cache-dir \
     numpy \
     Pillow \
-    pygltflib
+    pygltflib \
+    trimesh[easy] \
+    pillow-heif
 
 # Build mvs-texturing from source
 WORKDIR /opt

@@ -7,9 +7,8 @@ using UnityEngine;
 /// and captured keyframes (textured-mesh.json + textured-mesh.glb). This provides photoreal visuals
 /// complementing RoomPlan's idealized box-based navigation geometry.
 /// 
-/// IMPORTANT: Requires a GLB/GLTF importer plugin for Unity (e.g., GLTFUtility, UnityGLTF, or glTFast).
-/// This script assumes GLTFUtility is available. Install it from the Unity Asset Store or GitHub:
-/// https://github.com/Siccity/GLTFUtility
+/// Uses glTFast (Unity's official package) for GLB loading. The package is included in Packages/manifest.json
+/// as com.atteneder.gltfast@6.9.1, which is Unity 6 compatible.
 /// </summary>
 public sealed class TexturedMesh
 {
@@ -60,37 +59,46 @@ public sealed class TexturedMesh
 
             var result = new TexturedMesh { document = document };
 
-            // Load the GLB using GLTFUtility (or another GLTF importer).
-            // If GLTFUtility is not available, this will fail at runtime and return null.
+            // Load the GLB using glTFast.
             try
             {
-                #if UNITY_EDITOR || !UNITY_WEBGL
-                // GLTFUtility.Importer.LoadFromFile is synchronous and works in editor/standalone.
-                // For WebGL or async loading, use GLTFUtility.Importer.LoadFromFileAsync.
-                var importer = new Siccity.GLTFUtility.Importer();
-                result.meshObject = importer.LoadFromFile(glbPath);
+                // glTFast supports both synchronous and async loading.
+                // For simplicity, we use the synchronous API here. For better performance,
+                // consider using GltfImport.LoadAsync in production.
+                var gltf = new GLTFast.GltfImport();
+                var success = gltf.Load(glbPath);
                 
-                if (result.meshObject != null)
+                if (success)
                 {
-                    result.meshObject.name = $"TexturedMesh-{document.zoneId}";
-                    // The mesh is in ARKit world coordinates, matching the zone's coordinate system.
-                    // No transform adjustment needed if the zone's parent is already in ARKit coords.
-                    Debug.Log($"[Gnarly] Loaded textured mesh: {document.meshTriangleCount} triangles, " +
-                             $"{document.keyframeCount} keyframes, {document.texturingMethod}");
+                    result.meshObject = new GameObject($"TexturedMesh-{document.zoneId}");
+                    var instantiator = new GLTFast.GameObjectInstantiator(gltf, result.meshObject.transform);
+                    success = gltf.InstantiateMainScene(instantiator);
+                    
+                    if (success && result.meshObject != null)
+                    {
+                        // The mesh is in ARKit world coordinates, matching the zone's coordinate system.
+                        // No transform adjustment needed if the zone's parent is already in ARKit coords.
+                        Debug.Log($"[Gnarly] Loaded textured mesh: {document.meshTriangleCount} triangles, " +
+                                 $"{document.keyframeCount} keyframes, {document.texturingMethod}");
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[Gnarly] glTFast instantiation failed for {glbPath}");
+                        if (result.meshObject != null) UnityEngine.Object.Destroy(result.meshObject);
+                        return null;
+                    }
                 }
                 else
                 {
-                    Debug.LogWarning($"[Gnarly] GLB import returned null for {glbPath}");
+                    Debug.LogWarning($"[Gnarly] glTFast failed to load {glbPath}");
                     return null;
                 }
-                #else
-                Debug.LogWarning("[Gnarly] Synchronous GLB loading not supported on WebGL. Use async loader or preload.");
-                return null;
-                #endif
+                
+                gltf.Dispose();
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[Gnarly] Failed to load GLB (is GLTFUtility installed?): {e.Message}");
+                Debug.LogWarning($"[Gnarly] Failed to load GLB with glTFast: {e.Message}");
                 return null;
             }
 

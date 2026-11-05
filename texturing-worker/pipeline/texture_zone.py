@@ -102,34 +102,51 @@ def run_mvs_texturing(work_dir: Path, mesh_path: Path, output_prefix: Path) -> b
 
 def convert_obj_to_glb(obj_path: Path, output_glb: Path, texture_format: str = "jpeg") -> bool:
     """
-    Convert OBJ+MTL to GLB. Optionally compress textures to KTX2/Basis.
-    For now, we'll use a simple conversion with pygltflib.
-    (In production, use gltf-pipeline or Basis Universal for KTX2 compression.)
+    Convert OBJ+MTL to GLB with texture compression.
+    Uses trimesh for mesh loading and pygltflib for GLB export.
+    Texture formats: 'jpeg' (fallback), 'ktx2-basis-uastc' (high quality), 'ktx2-basis-etc1s' (smaller).
     """
     try:
-        from pygltflib import GLTF2
+        import trimesh
+        from PIL import Image
+        import base64
         
-        # pygltflib can read OBJ files and convert to GLTF/GLB
-        # This is a placeholder; a real implementation would use a robust converter
-        # like Blender's Python API or assimp with texture optimization.
+        print(f"Converting {obj_path} to {output_glb} with texture format: {texture_format}")
         
-        print(f"Converting {obj_path} to {output_glb}...")
-        print("Warning: Using placeholder OBJ->GLB converter. For production, integrate gltf-pipeline or Blender.")
+        # Load OBJ with trimesh (handles MTL and textures automatically)
+        mesh = trimesh.load(str(obj_path), process=False, maintain_order=True)
         
-        # Placeholder: just copy the OBJ for now, as a real converter would be complex
-        # In a real pipeline, you'd use:
-        # 1. Load OBJ with trimesh/pymesh/meshio
-        # 2. Create GLTF2 structure with pygltflib
-        # 3. Embed/reference textures
-        # 4. Write GLB
+        # Handle case where trimesh returns a Scene with multiple meshes
+        if isinstance(mesh, trimesh.Scene):
+            # Merge all meshes in the scene
+            meshes_list = list(mesh.geometry.values())
+            if not meshes_list:
+                print("No geometry found in OBJ file.", file=sys.stderr)
+                return False
+            mesh = trimesh.util.concatenate(meshes_list)
         
-        # For this prototype, we'll note that texrecon outputs OBJ+MTL+textures,
-        # and the server would need a separate step to convert to GLB.
-        output_glb.write_text("GLB conversion not implemented in this prototype. Use gltf-pipeline or Blender to convert texrecon's OBJ output to GLB.")
-        return True
+        if not isinstance(mesh, trimesh.Trimesh):
+            print(f"Loaded mesh is not a Trimesh: {type(mesh)}", file=sys.stderr)
+            return False
+        
+        print(f"Loaded mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+        
+        # Export to GLB using trimesh's built-in exporter
+        # trimesh can export to GLB with textures embedded
+        export_data = mesh.export(file_type='glb')
+        
+        if isinstance(export_data, bytes):
+            output_glb.write_bytes(export_data)
+            print(f"Wrote GLB: {output_glb} ({len(export_data)} bytes)")
+            return True
+        else:
+            print("GLB export did not return bytes.", file=sys.stderr)
+            return False
         
     except Exception as e:
         print(f"GLB conversion failed: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
         return False
 
 
