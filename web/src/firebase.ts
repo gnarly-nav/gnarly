@@ -82,6 +82,17 @@ async function loadSurfaceColors(jsonPath: string, atlasPath: string): Promise<S
   }
 }
 
+/** Optional textured mesh; a zone without one falls back to surface colors or default palette. */
+async function loadTexturedMesh(meshPath: string): Promise<string | undefined> {
+  try {
+    const response = await fetchStorage(meshPath);
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  } catch {
+    return undefined;
+  }
+}
+
 export function normalizeGraph(raw: unknown): Graph {
   if (!raw || typeof raw !== 'object') throw Error('Invalid navigation graph');
   const value = raw as Record<string, unknown>;
@@ -161,7 +172,15 @@ export async function loadBuilding(input: Building): Promise<Building> {
       const colors = scanResult.scan
         ? await loadSurfaceColors(zone.surfaceColorsPath || zoneBase + '/surface-colors.json', zone.surfaceColorAtlasPath || zoneBase + '/surface-colors.jpg')
         : undefined;
-      const scan = scanResult.scan && colors ? { ...scanResult.scan, colors } : scanResult.scan;
+      const texturedMeshUrl = scanResult.scan
+        ? await loadTexturedMesh(zone.texturedMeshPath || zoneBase + '/textured-mesh.glb')
+        : undefined;
+      const texturedMesh = texturedMeshUrl ? { meshUrl: texturedMeshUrl } : undefined;
+      let scan = scanResult.scan;
+      if (scan) {
+        if (colors) scan = { ...scan, colors };
+        if (texturedMesh) scan = { ...scan, texturedMesh };
+      }
       let rawScanStatus = '';
       if (!scan) {
         const rawPath = zone.scanJsonPath || storageBase + '/zones/' + item.id + '/scan.json';

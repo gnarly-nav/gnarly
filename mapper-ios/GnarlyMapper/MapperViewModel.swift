@@ -45,6 +45,7 @@ final class MapperViewModel: ObservableObject {
 
     let arSession = ARSession()
     private let colorRecorder = SurfaceColorRecorder()
+    private let meshRecorder = SceneMeshRecorder()
     private weak var captureView: RoomCaptureView?
     private var capturedRoom: CapturedRoom?
     private var testAnchor: TestAnchor?
@@ -88,6 +89,7 @@ final class MapperViewModel: ObservableObject {
         let loaded = StairCatalogStore.load()
         catalog = loaded
         zoneConnectionsJSON = loaded.navigatorZoneConnectionsJSON()
+        arSession.delegate = self
     }
 
     func configure(captureView: RoomCaptureView) {
@@ -127,6 +129,7 @@ final class MapperViewModel: ObservableObject {
         lastInstruction = "none"
         lastCaptureFailure = nil
         colorRecorder.reset()
+        meshRecorder.reset()
         coverageGeneration += 1
         coverage = .empty
         liveSurfaces = []
@@ -433,6 +436,8 @@ final class MapperViewModel: ObservableObject {
         let anchorTransforms = colorRecorder.getAnchorTransforms(arSession)
         let capturedAt = ISO8601DateFormatter().string(from: Date())
         statusText = keyframes.isEmpty ? savingStatus : "Coloring the model from \(keyframes.count) scan photos…"
+        
+        let meshBundle = meshRecorder.hasCapture ? meshRecorder.exportBundle(keyframes: keyframes) : nil
 
         Task { @MainActor [weak self] in
             // Baking is CPU-heavy (every photo is projected onto every visible face), so keep it off the main actor.
@@ -468,7 +473,8 @@ final class MapperViewModel: ObservableObject {
                             stairs: draft.stairs.isEmpty ? nil : draft,
                             recoveredStairs: recoveredStairs,
                             recoveredFloors: recoveredFloors,
-                            surfaceColors: colors
+                            surfaceColors: colors,
+                            meshBundle: meshBundle
                         )
                         try StairCatalogStore.save(draft)
                         self.catalog = draft
@@ -509,6 +515,9 @@ final class MapperViewModel: ObservableObject {
         let configuration = ARWorldTrackingConfiguration()
         configuration.planeDetection = [.horizontal, .vertical]
         configuration.environmentTexturing = .automatic
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+            configuration.sceneReconstruction = .mesh
+        }
         arSession.run(configuration, options: [.resetTracking, .removeExistingAnchors])
     }
 
@@ -775,5 +784,19 @@ final class MapperViewModel: ObservableObject {
         errorMessage = message
         showsError = true
         statusText = "Needs attention"
+    }
+}
+
+extension MapperViewModel: ARSessionDelegate {
+    nonisolated func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
+        let meshAnchors = anchors.compactMap { $0 as? ARMeshAnchor }
+        guard !meshAnchors.isEmpty else { return }
+        meshRecorder.update(meshAnchors: meshAnchors)
+    }
+    
+    nonisolated func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
+        let meshAnchors = anchors.compactMap { $0 as? ARMeshAnchor }
+        guard !meshAnchors.isEmpty else { return }
+        meshRecorder.update(meshAnchors: meshAnchors)
     }
 }

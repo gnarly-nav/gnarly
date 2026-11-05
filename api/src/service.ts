@@ -35,6 +35,7 @@ import {
 } from './model.ts';
 import { rateKey, rateWindow, type CounterStore, type MetadataStore, type ObjectStore } from './store.ts';
 import { validatePackageObject } from './validatePackage.ts';
+import { type TexturingQueue } from './texturingQueue.ts';
 
 export type Deps = {
   now: () => Date;
@@ -43,6 +44,7 @@ export type Deps = {
   objects: ObjectStore;
   metadata: MetadataStore;
   counters: CounterStore;
+  texturingQueue?: TexturingQueue;
   quotas?: Quotas;
   uploadTtlMs?: number;
   downloadTtlMs?: number;
@@ -236,6 +238,21 @@ export class PublishApi {
 
     const write = this.commitWrite(publish);
     await this.deps.metadata.commit(write);
+    
+    // Trigger texturing jobs for zones with mesh-bundle
+    if (this.deps.texturingQueue) {
+      for (const zone of publish.zones) {
+        const hasMeshBundle = publish.files.some(file => file.zoneId === zone.zoneId && file.path.includes('mesh-bundle'));
+        if (hasMeshBundle) {
+          try {
+            await this.deps.texturingQueue.enqueue(id, publish.versionId, zone.zoneId);
+          } catch (error) {
+            console.error(`[CommitPublish] Failed to enqueue texturing job for zone ${zone.zoneId}:`, error);
+          }
+        }
+      }
+    }
+    
     return { buildingId: id, versionId: publish.versionId, activeVersion: publish.versionId, committed: true };
   }
 

@@ -27,6 +27,7 @@ const validators: Record<string, ValidateFn> = {
   'zone-connections.json': ajv.compile(loadSchema('zone-connections.schema.json')),
   'building-layout.json': ajv.compile(loadSchema('building-layout.schema.json')),
   'surface-colors.json': ajv.compile(loadSchema('surface-colors.schema.json')),
+  'textured-mesh.json': ajv.compile(loadSchema('textured-mesh.schema.json')),
 };
 
 function schemaErrors(validate: ValidateFn): string {
@@ -61,6 +62,11 @@ export function validatePackageObject(name: string, bytes: Buffer, zoneId: strin
     if (!jpeg) throw new ApiError(400, 'invalid_package', 'surface-colors.jpg is not a JPEG.');
     return;
   }
+  if (name === 'textured-mesh.glb') {
+    const glb = bytes.length >= 12 && bytes[0] === 0x67 && bytes[1] === 0x6c && bytes[2] === 0x54 && bytes[3] === 0x46;
+    if (!glb) throw new ApiError(400, 'invalid_package', 'textured-mesh.glb is not a valid GLB file (missing glTF magic header).');
+    return;
+  }
   if (name === 'scan.json') {
     requireObject(name, parseJson(name, bytes));
     return;
@@ -72,10 +78,13 @@ export function validatePackageObject(name: string, bytes: Buffer, zoneId: strin
   if (!validate(value)) {
     throw new ApiError(400, 'invalid_package', `${name} does not match its schema: ${schemaErrors(validate)}`);
   }
-  if ((name === 'building.json' || name === 'scan-features.json' || name === 'surface-colors.json') && value.zoneId !== zoneId) {
+  if ((name === 'building.json' || name === 'scan-features.json' || name === 'surface-colors.json' || name === 'textured-mesh.json') && value.zoneId !== zoneId) {
     throw new ApiError(400, 'invalid_package', `${name} zoneId must be ${zoneId}.`);
   }
   if (name === 'surface-colors.json' && value.atlas !== 'surface-colors.jpg') {
     throw new ApiError(400, 'invalid_package', 'surface-colors.json atlas must be surface-colors.jpg.');
+  }
+  if (name === 'textured-mesh.json' && value.mesh !== 'textured-mesh.glb') {
+    throw new ApiError(400, 'invalid_package', 'textured-mesh.json mesh must be textured-mesh.glb.');
   }
 }
