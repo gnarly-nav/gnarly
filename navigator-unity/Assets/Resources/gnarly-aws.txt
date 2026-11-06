@@ -3,6 +3,6 @@
 # cognitoDomain=gnarly-naijei.auth.us-east-1.amazoncognito.com
 # cognitoClientId=1osnrt38iuqvf5laum1tnj1hdn
 # cognitoUserPoolId=us-east-1_pQIUmVbPJ
-# cognitoRedirectUri=https://naijei.com/gnarly/
-# iOS uses that https redirect. The Unity Editor always uses http://localhost:5173/
+# cognitoRedirectUri=gnarlynavigator://auth/
+# Device Google sign-in uses that custom scheme. The Unity Editor always uses http://localhost:5173/
 # A bare https URL also sets apiBase. gnarly-api-base.txt is applied after this file.

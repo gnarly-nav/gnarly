@@ -94,11 +94,8 @@ final class CognitoSession: ObservableObject {
         errorMessage = nil
         defer { isWorking = false }
         do {
-            if #available(iOS 17.4, *) {
-                try await runHostedSignIn(identityProvider: identityProvider)
-                return true
-            }
-            throw CognitoAuthError("Sign in needs iOS 17.4 or later so the app can use the website’s Cognito redirect.")
+            try await runHostedSignIn(identityProvider: identityProvider)
+            return true
         } catch let error as CognitoAuthError {
             errorMessage = error.message
             return false
@@ -108,7 +105,6 @@ final class CognitoSession: ObservableObject {
         }
     }
 
-    @available(iOS 17.4, *)
     private func runHostedSignIn(identityProvider: String?) async throws {
         let config = GnarlyAwsConfig.current
         let verifier = CognitoOAuth.codeVerifier()
@@ -122,10 +118,10 @@ final class CognitoSession: ObservableObject {
             state: state,
             identityProvider: identityProvider
         ) else { throw CognitoAuthError("The Cognito sign-in URL is invalid.") }
-        guard let callback = CognitoOAuth.callbackParts(redirectURI: config.redirectURI) else {
-            throw CognitoAuthError("The Cognito redirect URL is invalid.")
+        guard let scheme = CognitoOAuth.callbackScheme(redirectURI: config.redirectURI) else {
+            throw CognitoAuthError("The Cognito redirect must use the gnarlymapper URL scheme.")
         }
-        let returned = try await present(url: url, host: callback.host, path: callback.path)
+        let returned = try await present(url: url, callbackScheme: scheme)
         guard let components = URLComponents(url: returned, resolvingAgainstBaseURL: false) else {
             throw CognitoAuthError("Google sign-in could not be completed. Try again.")
         }
@@ -320,11 +316,10 @@ final class CognitoSession: ObservableObject {
         emailVerified = claims.emailVerified
     }
 
-    @available(iOS 17.4, *)
-    private func present(url: URL, host: String, path: String) async throws -> URL {
+    private func present(url: URL, callbackScheme: String) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             let gate = ResumeOnce(continuation)
-            let session = ASWebAuthenticationSession(url: url, callback: .https(host: host, path: path)) { callbackURL, error in
+            let session = ASWebAuthenticationSession(url: url, callbackURLScheme: callbackScheme) { callbackURL, error in
                 if let callbackURL {
                     gate.resume(returning: callbackURL)
                     return

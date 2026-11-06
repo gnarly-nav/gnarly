@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: com.gnarly
   deploymentTarget:
     # RoomCaptureView(frame:arSession:) requires iOS 17.
-    # Cognito hosted sign-in uses ASWebAuthenticationSession HTTPS callbacks (iOS 17.4).
+    # Cognito hosted sign-in uses ASWebAuthenticationSession with the gnarlymapper URL scheme.
     iOS: "17.0"
 targets:
   GnarlyMapper:

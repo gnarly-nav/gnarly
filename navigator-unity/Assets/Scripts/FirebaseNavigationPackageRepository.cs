@@ -373,10 +373,13 @@ public sealed class FirebaseNavigationPackageRepository
     string HostedRedirect()
     {
 #if UNITY_IOS && !UNITY_EDITOR
-        return string.IsNullOrWhiteSpace(config.deviceRedirectUri) ? CognitoAuth.DeviceRedirectUri : config.deviceRedirectUri;
+        var redirect = string.IsNullOrWhiteSpace(config.deviceRedirectUri) ? CognitoAuth.DeviceRedirectUri : config.deviceRedirectUri;
 #else
-        return CognitoAuth.EditorRedirectUri;
+        var redirect = CognitoAuth.EditorRedirectUri;
 #endif
+        redirect = (redirect ?? "").Trim();
+        if (redirect.Length > 0 && !redirect.EndsWith("/", StringComparison.Ordinal)) redirect += "/";
+        return redirect;
     }
 
     static PackageFile FindPackageFile(PackageFile[] files, string name)

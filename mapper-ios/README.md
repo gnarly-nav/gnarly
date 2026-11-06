@@ -1,6 +1,6 @@
 # Native mapper workspace
 
-This is the native Swift/SwiftUI mapper proof-of-concept app. See [SETUP.md](SETUP.md) to generate the Xcode project and run it on a LiDAR iPhone.
+This is the native Swift/SwiftUI mapper proof-of-concept app. See [SETUP.md](SETUP.md) to generate the Xcode project and run it on a LiDAR iPhone. Google sign-in returns through the custom URL scheme `gnarlymapper://auth/`. The website keeps `https://naijei.com/gnarly/`. See [FIREBASE_SETUP.md](FIREBASE_SETUP.md).
 
 ## POC responsibility
 

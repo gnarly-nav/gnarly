@@ -14,15 +14,15 @@ Set these in `GnarlyMapper/Info.plist`. Empty values fall back to the live accou
 | `CognitoUserPoolId` | `us-east-1_pQIUmVbPJ` |
 | `CognitoClientId` | `1osnrt38iuqvf5laum1tnj1hdn` |
 | `CognitoDomain` | `gnarly-naijei.auth.us-east-1.amazoncognito.com` |
-| `CognitoRedirectURI` | `https://naijei.com/gnarly/` |
+| `CognitoRedirectURI` | `gnarlymapper://auth/` |
 
 Use `http://127.0.0.1:8080` for `GnarlyApiBaseURL` only when the API is running on the same Mac. A device needs the https origin.
 
-No `GoogleService-Info.plist` and no separate Google iOS client ID. Google is the Cognito hosted identity provider. The redirect above is already registered on the web app client, and iOS 17.4+ `ASWebAuthenticationSession` returns that https callback to the app.
+No `GoogleService-Info.plist` and no separate Google iOS client ID. Google is the Cognito hosted identity provider. The app registers the `gnarlymapper` URL scheme, and `ASWebAuthenticationSession` returns `gnarlymapper://auth/` to the app. That callback is registered on the existing public app client. The website still uses `https://naijei.com/gnarly/`.
 
 ## Sign-in and access
 
-1. Run the mapper on an iPhone with iOS 17.4 or later. RoomPlan still needs a LiDAR device; the simulator can compile but cannot scan.
+1. Run the mapper on an iPhone with iOS 17 or later. RoomPlan still needs a LiDAR device; the simulator can compile but cannot scan.
 2. Tap **Sign in with Google**, or enter the email and password for an existing Cognito user. Google opens the hosted UI. Email uses the `USER_SRP_AUTH` challenge, the same one as the website, and does not create an account.
 3. The ID token is stored in the Keychain and sent as `Authorization: Bearer` on API calls. The access token is not sent. It has no email claim.
 4. Anyone signed in can list and open maps. Publish, placement, and layout saves succeed only for a verified address in `ADMIN_EMAILS` (default `nj277@cornell.edu`). Another account gets HTTP 403 from the API.

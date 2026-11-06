@@ -4,8 +4,8 @@ This project is defined with [XcodeGen](https://github.com/yonaskolb/XcodeGen) s
 
 ## Prerequisites
 
-- Xcode with the iOS 17.4 SDK (Cognito hosted sign-in uses an https authentication callback)
-- A LiDAR-capable iPhone running iOS 17.4+
+- Xcode with the iOS 17 SDK
+- A LiDAR-capable iPhone running iOS 17 or later
 - XcodeGen (`brew install xcodegen`), or create an equivalent SwiftUI iOS app manually using the settings in `project.yml`
 
 ## Generate and run

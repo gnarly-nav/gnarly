@@ -9,7 +9,7 @@ enum CognitoOAuth {
     static let defaultUserPoolID = "us-east-1_pQIUmVbPJ"
     static let defaultClientID = "1osnrt38iuqvf5laum1tnj1hdn"
     static let defaultDomain = "gnarly-naijei.auth.us-east-1.amazoncognito.com"
-    static let defaultRedirectURI = "https://naijei.com/gnarly/"
+    static let defaultRedirectURI = "gnarlymapper://auth/"
 
     static func hostedHost(_ domain: String) -> String {
         domain.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -112,10 +112,14 @@ enum CognitoOAuth {
         return Claims(sub: json["sub"] as? String ?? "", email: email, emailVerified: verified, exp: exp)
     }
 
-    static func callbackParts(redirectURI: String) -> (host: String, path: String)? {
-        guard let components = URLComponents(string: redirectURI), let host = components.host, !host.isEmpty else { return nil }
-        let path = components.path.isEmpty ? "/" : components.path
-        return (host, path)
+    /// Custom scheme for `ASWebAuthenticationSession(url:callbackURLScheme:)`.
+    /// HTTPS redirects need an associated domain and are not used by this app.
+    static func callbackScheme(redirectURI: String) -> String? {
+        guard let scheme = URLComponents(string: redirectURI)?.scheme?.lowercased(),
+              !scheme.isEmpty,
+              scheme != "http",
+              scheme != "https" else { return nil }
+        return scheme
     }
 
     private static func form(_ pairs: [(String, String)]) -> String {

@@ -9,7 +9,7 @@ using UnityEngine.Networking;
 
 /// <summary>
 /// Cognito hosted UI (PKCE) for Google sign-in. Email and password use CognitoSrp.
-/// iOS uses the website's https redirect. The Editor uses the registered localhost redirect.
+/// A device uses the gnarlynavigator custom URL scheme. The Editor uses the localhost redirect.
 /// </summary>
 public static class CognitoAuth
 {
@@ -17,7 +17,7 @@ public static class CognitoAuth
     public const string DefaultClientId = "1osnrt38iuqvf5laum1tnj1hdn";
     public const string DefaultPoolId = "us-east-1_pQIUmVbPJ";
     public const string DefaultApiBase = "https://m7sgp6qsjkimymyrwa6bilxqzq0acbhx.lambda-url.us-east-1.on.aws";
-    public const string DeviceRedirectUri = "https://naijei.com/gnarly/";
+    public const string DeviceRedirectUri = "gnarlynavigator://auth/";
     public const string EditorRedirectUri = "http://localhost:5173/";
 
     public static string RedirectUri()
