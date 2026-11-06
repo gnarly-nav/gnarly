@@ -347,7 +347,9 @@ enum BuildingMesh {
         fallback: UIColor,
         upward: Bool
     ) -> SCNNode {
-        let textured = usesAtlas(face, atlas: atlas)
+        // Floors are seen in pieces while walking. The atlas is already flood-filled,
+        // so a lower bar still shows the photo instead of the flat fallback.
+        let textured = usesAtlas(face, atlas: atlas, minimum: 0.08)
         var positions: [SCNVector3] = []
         var normals: [SCNVector3] = []
         var uvs: [CGPoint] = []
@@ -527,9 +529,9 @@ enum BuildingMesh {
         return CGPoint(x: x + CGFloat(u) * rw, y: y + (1 - CGFloat(v)) * rh)
     }
 
-    private static func usesAtlas(_ face: SurfaceColorDocument.Face?, atlas: UIImage?) -> Bool {
+    private static func usesAtlas(_ face: SurfaceColorDocument.Face?, atlas: UIImage?, minimum: Float = atlasCoverage) -> Bool {
         guard let atlas, atlas.size.width > 1, atlas.size.height > 1,
-              let face, face.coverage >= atlasCoverage,
+              let face, face.coverage >= minimum,
               let rect = face.rect, rect.count == 4, rect[2] > 1, rect[3] > 1 else { return false }
         return true
     }

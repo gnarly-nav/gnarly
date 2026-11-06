@@ -401,6 +401,19 @@ enum FloorOutline {
         return result
     }
 
+    /// A point inside the outline. `(0, 0)` is the surface center, which an L-shaped floor
+    /// leaves in the notch outside the room.
+    static func interiorPoint(_ polygon: [SIMD2<Float>]) -> SIMD2<Float> {
+        guard polygon.count >= 3 else { return .zero }
+        if contains(.zero, polygon, tolerance: 0) { return .zero }
+        if let triangle = triangles(polygon).first {
+            return (triangle.0 + triangle.1 + triangle.2) / 3
+        }
+        let centroid = polygon.reduce(SIMD2<Float>.zero, +) / Float(polygon.count)
+        if contains(centroid, polygon, tolerance: 0.02) { return centroid }
+        return polygon[0]
+    }
+
     static func contains(_ point: SIMD2<Float>, _ polygon: [SIMD2<Float>], tolerance: Float = 0.08) -> Bool {
         guard polygon.count >= 3 else { return true }
         if distanceToEdge(point, polygon) <= tolerance { return true }
@@ -534,11 +547,9 @@ struct BakeSurface: Sendable {
     }
 
     /// A point on this floor that is inside the outline, used to decide which side of a wall is the room.
+    /// The vertex average of an L sits in the missing corner, and so does the bounding-box center.
     var interiorLocal: SIMD2<Float> {
-        guard polygon.count >= 3 else { return .zero }
-        let centroid = polygon.reduce(SIMD2<Float>.zero, +) / Float(polygon.count)
-        if FloorOutline.contains(centroid, polygon, tolerance: 0.02) { return centroid }
-        return .zero
+        FloorOutline.interiorPoint(polygon)
     }
 
     func worldPoint(_ local: SIMD2<Float>) -> SIMD3<Float> {
@@ -794,6 +805,8 @@ enum SurfaceColorBaker {
         let normal: SIMD3<Float>
         let width: Float
         let height: Float
+        /// Floors are photographed looking along them, so depth agreement has to allow a slanted ray.
+        var isFloor = false
         var columns = 0
         var rows = 0
         var offset = 0
@@ -821,7 +834,7 @@ enum SurfaceColorBaker {
         }
     }
 
-    private static func makeFaces(_ surfaces: [BakeSurface]) -> ([Face], Float) {
+    static func makeFaces(_ surfaces: [BakeSurface]) -> ([Face], Float) {
         var faces = [Face]()
         for (index, surface) in surfaces.enumerated() where surface.kind != .opening {
             let t = surface.transform
@@ -830,9 +843,11 @@ enum SurfaceColorBaker {
             let z = simd_normalize(SIMD3<Float>(t.columns.2.x, t.columns.2.y, t.columns.2.z))
             let c = SIMD3<Float>(t.columns.3.x, t.columns.3.y, t.columns.3.z)
             let d = simd_abs(surface.dimensions)
-            func add(_ name: String, _ offset: SIMD3<Float>, _ u: SIMD3<Float>, _ v: SIMD3<Float>, _ n: SIMD3<Float>, _ w: Float, _ h: Float, _ occluder: Int) {
+            func add(_ name: String, _ offset: SIMD3<Float>, _ u: SIMD3<Float>, _ v: SIMD3<Float>, _ n: SIMD3<Float>, _ w: Float, _ h: Float, _ occluder: Int, floor: Bool = false) {
                 guard w > 0.02, h > 0.02 else { return }
-                faces.append(Face(surfaceIndex: index, occluderID: occluder, name: name, center: c + offset, uAxis: u, vAxis: v, normal: n, width: w, height: h))
+                var face = Face(surfaceIndex: index, occluderID: occluder, name: name, center: c + offset, uAxis: u, vAxis: v, normal: n, width: w, height: h)
+                face.isFloor = floor
+                faces.append(face)
             }
             if surface.kind == .stairs {
                 for face in StairSteps.faces(dimensions: d) {
@@ -848,8 +863,9 @@ enum SurfaceColorBaker {
                 add("pz", z * (d.z / 2), x, y, z, d.x, d.y, index)
                 add("nz", -z * (d.z / 2), -x, y, -z, d.x, d.y, index)
             } else {
-                add("pz", .zero, x, y, z, d.x, d.y, index)
-                add("nz", .zero, -x, y, -z, d.x, d.y, index)
+                let floor = surface.kind == .floor
+                add("pz", .zero, x, y, z, d.x, d.y, index, floor: floor)
+                add("nz", .zero, -x, y, -z, d.x, d.y, index, floor: floor)
             }
         }
 
@@ -865,22 +881,31 @@ enum SurfaceColorBaker {
         return (faces, texel)
     }
 
-    /// Drops floor texels that sit outside the room outline or on the far side of a wall.
-    /// Those texels never get a photo, and counting them makes the real floor look uncolored.
-    private static func markFloorFootprint(_ faces: inout [Face], surfaces: [BakeSurface], occluders: [Occluder]) {
+    /// Drops floor texels outside the scanned outline, and clips a plain rectangle to the near side of the walls.
+    /// An outline is already the room. Shooting rays at the walls from its center cuts the arms off an L, and the
+    /// handful of texels left in the notch never receive a photo, so the floor that is drawn stays uncolored.
+    static func markFloorFootprint(_ faces: inout [Face], surfaces: [BakeSurface], occluders: [Occluder]) {
         for index in faces.indices {
             let face = faces[index]
             let surface = surfaces[face.surfaceIndex]
             guard surface.kind == .floor else { continue }
-            let interior = surface.worldPoint(surface.interiorLocal)
             let count = face.columns * face.rows
             var onOutline = [Bool](repeating: false, count: count)
-            var inRoom = [Bool](repeating: false, count: count)
+            for row in 0 ..< face.rows {
+                for column in 0 ..< face.columns {
+                    onOutline[row * face.columns + column] = surface.containsLocal(face.surfaceLocal(column: column, row: row))
+                }
+            }
+            if surface.polygon.count >= 3 {
+                if onOutline.contains(true) { faces[index].inside = onOutline }
+                continue
+            }
+            let interior = surface.worldPoint(surface.interiorLocal)
+            var inRoom = onOutline
             for row in 0 ..< face.rows {
                 for column in 0 ..< face.columns {
                     let localIndex = row * face.columns + column
-                    guard surface.containsLocal(face.surfaceLocal(column: column, row: row)) else { continue }
-                    onOutline[localIndex] = true
+                    guard onOutline[localIndex] else { continue }
                     let world = face.point(column: column, row: row)
                     let travel = world - interior
                     let distance = simd_length(travel)
@@ -891,9 +916,12 @@ enum SurfaceColorBaker {
                     inRoom[localIndex] = !blocked
                 }
             }
-            if inRoom.contains(true) {
+            let kept = inRoom.reduce(0) { $0 + ($1 ? 1 : 0) }
+            let outlined = onOutline.reduce(0) { $0 + ($1 ? 1 : 0) }
+            // A sliver means the wall test started outside the room. Keep the rectangle rather than paint nothing.
+            if kept > 0, kept * 20 >= outlined {
                 faces[index].inside = inRoom
-            } else if onOutline.contains(true) {
+            } else if outlined > 0 {
                 faces[index].inside = onOutline
             }
         }
@@ -949,7 +977,7 @@ enum SurfaceColorBaker {
         }
     }
 
-    private static func makeOccluders(_ surfaces: [BakeSurface]) -> [Occluder] {
+    static func makeOccluders(_ surfaces: [BakeSurface]) -> [Occluder] {
         var holes = [String: [SIMD4<Float>]]()
         let wallsByID = Dictionary(
             surfaces.filter { $0.kind == .wall }.map { ($0.identifier, $0) },
@@ -1118,16 +1146,9 @@ enum SurfaceColorBaker {
                     let dy = min(frame.depthHeight - 1, Int(py * Float(frame.depthHeight) / height))
                     let depthIndex = dy * frame.depthWidth + dx
                     let measured = depth[depthIndex]
-                    // 0 = low, 1 = medium, 2 = high. A missing map means trust the depth.
-                    // Low-confidence hits are speckle, so they do not contribute a color.
-                    let confidence = frame.depthConfidence?[depthIndex] ?? 2
-                    if confidence == 0 { continue }
-                    if measured.isFinite, measured > 0 {
-                        if measured < z - max(0.05, 0.03 * z) { continue }   // something stands in front
-                        // RoomPlan planes sit centimeters off the LiDAR hit. Rejecting anything
-                        // farther than 8cm deleted most floor and wall samples, and the holes
-                        // filled in from whichever photo happened to agree.
-                        if measured > z + max(0.20, 0.10 * z) { continue }
+                    let confidence = Int(frame.depthConfidence?[depthIndex] ?? 2)
+                    if !depthMatches(measured: measured, confidence: confidence, z: z, cosine: cosine, floor: face.isFloor) {
+                        continue
                     }
                 } else if blockers.contains(where: { $0.hits(origin: camera, direction: ray / distance, maxT: distance - 0.12) }) {
                     continue
@@ -1143,6 +1164,29 @@ enum SurfaceColorBaker {
                 accumulation[texelIndex] += SIMD4<Float>(color * weight, weight)
             }
         }
+    }
+
+    /// Whether this LiDAR sample is the face, not something standing in front of it.
+    /// A floor is seen looking along it. A few centimeters between the RoomPlan plane and the
+    /// hit becomes a much larger gap along that ray, and the return is usually low confidence.
+    /// Walls still need a confident match so clutter does not smear onto them.
+    static func depthMatches(measured: Float, confidence: Int, z: Float, cosine: Float, floor: Bool) -> Bool {
+        let finite = measured.isFinite && measured > 0
+        if floor {
+            let slant = max(cosine, 0.2)
+            let near = max(0.12, 0.06 * z) / slant
+            let far = max(0.28, 0.14 * z) / slant
+            guard finite else { return true }
+            if measured < z - near { return false }
+            if confidence == 0 { return true }
+            return measured <= z + far
+        }
+        // 0 = low, 1 = medium, 2 = high. Low-confidence hits on a wall are speckle.
+        if confidence == 0 { return false }
+        guard finite else { return true }
+        if measured < z - max(0.05, 0.03 * z) { return false }
+        if measured > z + max(0.20, 0.10 * z) { return false }
+        return true
     }
 
     private static func projectedBoundsOverlap(face: Face, frame: FrameData) -> Bool {

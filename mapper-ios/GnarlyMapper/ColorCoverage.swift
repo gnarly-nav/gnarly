@@ -80,14 +80,16 @@ enum ColorCoverage {
     }
 
     /// Floor rectangles run past walls. Drop the part a wall separates from the inside of the room,
-    /// unless that would leave the floor with nothing to scan.
+    /// unless that would leave the floor with nothing to scan. A scanned outline is already the
+    /// room; the same straight cut removes the arms of an L.
     private static func reachableFloors(_ spots: [CoverageSample], surfaces: [BakeSurface]) -> [CoverageSample] {
         let floors = surfaces.filter { $0.kind == .floor }
         guard !floors.isEmpty else { return spots }
+        let outlined = Set(floors.filter { $0.polygon.count >= 3 }.map(\.identifier))
         let blockers = surfaces.filter { $0.kind == .wall }.map(Occluder.init)
         let interior = Dictionary(uniqueKeysWithValues: floors.map { ($0.identifier, $0.worldPoint($0.interiorLocal)) })
         let kept = spots.filter { spot in
-            guard spot.kind == "floor", let origin = interior[spot.surfaceID] else { return true }
+            guard spot.kind == "floor", !outlined.contains(spot.surfaceID), let origin = interior[spot.surfaceID] else { return true }
             return !blockers.contains { $0.blocks(origin: origin, target: spot.world) }
         }
         var restored = kept

@@ -259,6 +259,51 @@ final class BuildingModelsTests: XCTestCase {
         XCTAssertEqual(area, 12, accuracy: 0.01)
     }
 
+    func testLShapedFloorInteriorSitsInTheRoom() {
+        let polygon = lShapedFloorNotchAtOrigin()
+        let interior = FloorOutline.interiorPoint(polygon)
+        XCTAssertTrue(FloorOutline.contains(interior, polygon, tolerance: 0.02))
+        XCTAssertFalse(interior.x > -0.9 && interior.y > -0.4)
+    }
+
+    func testLShapedFloorKeepsBothArmsForSplatting() {
+        let polygon = lShapedFloorNotchAtOrigin()
+        let floor = levelCoverageFloor(id: "floor", width: 6, depth: 5, polygon: polygon)
+        let across = coveragePlane(id: "across", kind: .wall, center: SIMD3(1, 1.2, -0.5), normal: SIMD3(0, 0, 1), width: 4, height: 2.4)
+        let along = coveragePlane(id: "along", kind: .wall, center: SIMD3(-1, 1.2, 1), normal: SIMD3(1, 0, 0), width: 3, height: 2.4)
+        let surfaces = [floor, across, along]
+        var (faces, _) = SurfaceColorBaker.makeFaces(surfaces)
+        SurfaceColorBaker.markFloorFootprint(&faces, surfaces: surfaces, occluders: SurfaceColorBaker.makeOccluders(surfaces))
+        guard let top = faces.first(where: { $0.name == "pz" && $0.surfaceIndex == 0 }) else {
+            return XCTFail("Missing floor face")
+        }
+        XCTAssertTrue(top.isFloor)
+        XCTAssertTrue(face(top, countsNear: SIMD2(2, -2)))
+        XCTAssertTrue(face(top, countsNear: SIMD2(-2, 1.5)))
+        XCTAssertFalse(face(top, countsNear: SIMD2(1, 0.5)))
+    }
+
+    func testLShapedFloorCoverageReachesBothArms() {
+        let floor = levelCoverageFloor(id: "floor", width: 6, depth: 5, polygon: lShapedFloorNotchAtOrigin())
+        let across = coveragePlane(id: "across", kind: .wall, center: SIMD3(1, 1.2, -0.5), normal: SIMD3(0, 0, 1), width: 4, height: 2.4)
+        let camera = coverageCamera(eye: SIMD3(2, 1.6, -2), target: SIMD3(2, 0, -2))
+        let samples = ColorCoverage.grade(surfaces: [floor, across], cameras: [camera]).samples.filter { $0.surfaceID == "floor" }
+        XCTAssertTrue(samples.contains { $0.world.x > 2 && $0.world.z < -1 })
+        XCTAssertTrue(samples.contains { $0.world.x < -2 && $0.world.z > 1 })
+    }
+
+    func testFloorLiDARKeepsAGlancingHitThatWallsReject() {
+        let cosine: Float = 0.34
+        let z: Float = 2.4
+        XCTAssertTrue(SurfaceColorBaker.depthMatches(measured: z - 0.22, confidence: 0, z: z, cosine: cosine, floor: true))
+        XCTAssertTrue(SurfaceColorBaker.depthMatches(measured: z - 0.22, confidence: 2, z: z, cosine: cosine, floor: true))
+        XCTAssertFalse(SurfaceColorBaker.depthMatches(measured: z - 0.22, confidence: 2, z: z, cosine: 0.9, floor: false))
+        XCTAssertFalse(SurfaceColorBaker.depthMatches(measured: z - 0.22, confidence: 0, z: z, cosine: 0.9, floor: false))
+        XCTAssertFalse(SurfaceColorBaker.depthMatches(measured: z - 1.4, confidence: 0, z: z, cosine: cosine, floor: true))
+        XCTAssertFalse(SurfaceColorBaker.depthMatches(measured: z + 1.2, confidence: 2, z: z, cosine: cosine, floor: true))
+        XCTAssertTrue(SurfaceColorBaker.depthMatches(measured: z + 0.4, confidence: 2, z: z, cosine: cosine, floor: true))
+    }
+
     func testPlacementMatrixMatchesLayoutToWorld() {
         let entry = BuildingLayoutDocument.ZoneEntry(zoneId: "a", floor: 1, x: 3, z: -1, rotationDegrees: 0)
         let matrix = placementMatrix(entry, ground: 0)
@@ -332,6 +377,26 @@ private func assertInside(_ eye: SIMD3<Float>, _ limits: PreviewLimits, file: St
     XCTAssertLessThanOrEqual(eye.y, limits.maximum.y + 0.001, file: file, line: line)
     XCTAssertLessThanOrEqual(eye.z, limits.maximum.z + 0.001, file: file, line: line)
     XCTAssertGreaterThanOrEqual(eye.y, limits.groundY + limits.eyeClearance - 0.001, file: file, line: line)
+}
+
+/// An L whose bounding-box center is the missing corner, matching a RoomPlan floor.
+private func lShapedFloorNotchAtOrigin() -> [SIMD2<Float>] {
+    [SIMD2(-3, -2.5), SIMD2(3, -2.5), SIMD2(3, -0.5), SIMD2(-1, -0.5), SIMD2(-1, 2.5), SIMD2(-3, 2.5)]
+}
+
+private func face(_ top: SurfaceColorBaker.Face, countsNear point: SIMD2<Float>) -> Bool {
+    var best = 0
+    var bestDistance = Float.greatestFiniteMagnitude
+    for row in 0 ..< top.rows {
+        for column in 0 ..< top.columns {
+            let distance = simd_distance(top.surfaceLocal(column: column, row: row), point)
+            if distance < bestDistance {
+                bestDistance = distance
+                best = row * top.columns + column
+            }
+        }
+    }
+    return top.counts(best)
 }
 
 private func levelCoverageFloor(id: String, width: Float, depth: Float, polygon: [SIMD2<Float>]) -> BakeSurface {
