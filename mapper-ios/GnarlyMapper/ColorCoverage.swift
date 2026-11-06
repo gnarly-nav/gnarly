@@ -59,7 +59,7 @@ enum ColorCoverage {
 
     static func grade(surfaces: [BakeSurface], cameras: [CoverageCamera]) -> CoverageSnapshot {
         let scored = surfaces.filter { $0.kind != .opening && !$0.isPassable }
-        let spots = samples(on: scored)
+        let spots = reachableFloors(samples(on: scored), surfaces: scored)
         let blockers = scored.filter { $0.kind == .wall }.map(Occluder.init)
         let graded = spots.map { spot -> CoverageSample in
             var best = CoverageGrade.unseen
@@ -77,6 +77,28 @@ enum ColorCoverage {
             cameraCount: cameras.count,
             surfaceCount: Set(graded.map(\.surfaceID)).count
         )
+    }
+
+    /// Floor rectangles run past walls. Drop the part a wall separates from the inside of the room,
+    /// unless that would leave the floor with nothing to scan.
+    private static func reachableFloors(_ spots: [CoverageSample], surfaces: [BakeSurface]) -> [CoverageSample] {
+        let floors = surfaces.filter { $0.kind == .floor }
+        guard !floors.isEmpty else { return spots }
+        let blockers = surfaces.filter { $0.kind == .wall }.map(Occluder.init)
+        let interior = Dictionary(uniqueKeysWithValues: floors.map { ($0.identifier, $0.worldPoint($0.interiorLocal)) })
+        let kept = spots.filter { spot in
+            guard spot.kind == "floor", let origin = interior[spot.surfaceID] else { return true }
+            return !blockers.contains { $0.blocks(origin: origin, target: spot.world) }
+        }
+        var restored = kept
+        for floor in floors {
+            let had = spots.contains { $0.surfaceID == floor.identifier }
+            let has = kept.contains { $0.surfaceID == floor.identifier }
+            if had && !has {
+                restored.append(contentsOf: spots.filter { $0.surfaceID == floor.identifier })
+            }
+        }
+        return restored
     }
 
     static func hint(kind: String, grade: CoverageGrade) -> String {
@@ -141,10 +163,11 @@ enum ColorCoverage {
                 let columns = gridCount(face.width, limit: surface.kind == .object || surface.kind == .stairs ? 1 : 5, spacing: 0.85)
                 let rows = gridCount(face.height, limit: surface.kind == .object || surface.kind == .stairs ? 1 : 4, spacing: 0.75)
                 return (0 ..< rows).flatMap { row in
-                    (0 ..< columns).map { column in
+                    (0 ..< columns).compactMap { column -> CoverageSample? in
                         let u = (Float(column) + 0.5) / Float(columns) - 0.5
                         let v = (Float(row) + 0.5) / Float(rows) - 0.5
                         let local = face.center + face.axisU * (u * face.width) + face.axisV * (v * face.height)
+                        if surface.kind == .floor, !surface.containsLocal(SIMD2(local.x, local.y)) { return nil }
                         let world = origin + x * local.x + y * local.y + z * local.z
                         let normal = simd_normalize(x * face.normal.x + y * face.normal.y + z * face.normal.z)
                         return CoverageSample(

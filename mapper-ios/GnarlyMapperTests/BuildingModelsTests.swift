@@ -212,6 +212,53 @@ final class BuildingModelsTests: XCTestCase {
         XCTAssertEqual(snapshot.samples.first { $0.id.contains("-pz-") }?.grade, .unseen)
     }
 
+    func testFloorCoverageStaysInsideTheRoomOutline() {
+        let floor = levelCoverageFloor(
+            id: "floor",
+            width: 4,
+            depth: 4,
+            polygon: [
+                SIMD2(-2, -2), SIMD2(2, -2), SIMD2(2, 0),
+                SIMD2(0, 0), SIMD2(0, 2), SIMD2(-2, 2),
+            ]
+        )
+        let camera = coverageCamera(eye: SIMD3(0, 2, 0), target: .zero)
+        let snapshot = ColorCoverage.grade(surfaces: [floor], cameras: [camera])
+        XCTAssertFalse(snapshot.samples.isEmpty)
+        XCTAssertTrue(snapshot.samples.allSatisfy { sample in
+            let local = floor.transform.inverse * SIMD4(sample.world.x, sample.world.y, sample.world.z, 1)
+            return FloorOutline.contains(SIMD2(local.x, local.y), floor.polygon, tolerance: 0.02)
+        })
+        XCTAssertFalse(snapshot.samples.contains { sample in
+            let local = floor.transform.inverse * SIMD4(sample.world.x, sample.world.y, sample.world.z, 1)
+            return local.x > 0.2 && local.y > 0.2
+        })
+    }
+
+    func testFloorCoverageDoesNotCrossAWall() {
+        let floor = levelCoverageFloor(id: "floor", width: 4, depth: 2, polygon: [])
+        let wall = coveragePlane(id: "wall", kind: .wall, center: SIMD3(1, 1.2, 0), normal: SIMD3(1, 0, 0), width: 3, height: 2.4)
+        let camera = coverageCamera(eye: SIMD3(0, 2, 0), target: .zero)
+        let snapshot = ColorCoverage.grade(surfaces: [floor, wall], cameras: [camera])
+        let floorSamples = snapshot.samples.filter { $0.surfaceID == "floor" }
+        XCTAssertFalse(floorSamples.isEmpty)
+        XCTAssertTrue(floorSamples.allSatisfy { $0.world.x < 1.15 })
+        XCTAssertTrue(floorSamples.contains { $0.grade == .good })
+    }
+
+    func testAnLShapedOutlineTriangulatesToItsOwnArea() {
+        let outline = [
+            SIMD2<Float>(-2, -2), SIMD2(2, -2), SIMD2(2, 0),
+            SIMD2(0, 0), SIMD2(0, 2), SIMD2(-2, 2),
+        ]
+        let area = FloorOutline.triangles(outline).reduce(Float(0)) { sum, triangle in
+            let cross = (triangle.1.x - triangle.0.x) * (triangle.2.y - triangle.0.y)
+                - (triangle.1.y - triangle.0.y) * (triangle.2.x - triangle.0.x)
+            return sum + abs(cross) * 0.5
+        }
+        XCTAssertEqual(area, 12, accuracy: 0.01)
+    }
+
     func testPlacementMatrixMatchesLayoutToWorld() {
         let entry = BuildingLayoutDocument.ZoneEntry(zoneId: "a", floor: 1, x: 3, z: -1, rotationDegrees: 0)
         let matrix = placementMatrix(entry, ground: 0)
@@ -285,6 +332,23 @@ private func assertInside(_ eye: SIMD3<Float>, _ limits: PreviewLimits, file: St
     XCTAssertLessThanOrEqual(eye.y, limits.maximum.y + 0.001, file: file, line: line)
     XCTAssertLessThanOrEqual(eye.z, limits.maximum.z + 0.001, file: file, line: line)
     XCTAssertGreaterThanOrEqual(eye.y, limits.groundY + limits.eyeClearance - 0.001, file: file, line: line)
+}
+
+private func levelCoverageFloor(id: String, width: Float, depth: Float, polygon: [SIMD2<Float>]) -> BakeSurface {
+    var transform = matrix_identity_float4x4
+    transform.columns.0 = SIMD4(1, 0, 0, 0)
+    transform.columns.1 = SIMD4(0, 0, 1, 0)
+    transform.columns.2 = SIMD4(0, 1, 0, 0)
+    transform.columns.3 = SIMD4(0, 0, 0, 1)
+    return BakeSurface(
+        identifier: id,
+        kind: .floor,
+        transform: transform,
+        dimensions: SIMD3(width, depth, 0.05),
+        parentIdentifier: nil,
+        isPassable: false,
+        polygon: polygon
+    )
 }
 
 private func coverageCamera(eye: SIMD3<Float>, target: SIMD3<Float>) -> CoverageCamera {

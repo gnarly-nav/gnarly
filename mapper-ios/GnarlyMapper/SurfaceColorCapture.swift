@@ -383,6 +383,113 @@ final class SurfaceColorRecorder {
     }
 }
 
+// MARK: - Floor outline
+
+/// The part of a RoomPlan floor that is actually inside the room. The surface rectangle keeps
+/// extending past walls, and that extra area is what the scan keeps chasing.
+enum FloorOutline {
+    static func cleaned(_ corners: [SIMD2<Float>]) -> [SIMD2<Float>] {
+        var result: [SIMD2<Float>] = []
+        for corner in corners where corner.x.isFinite && corner.y.isFinite {
+            if let last = result.last, simd_distance(last, corner) < 0.02 { continue }
+            result.append(corner)
+        }
+        if result.count > 1, let first = result.first, let last = result.last, simd_distance(first, last) < 0.02 {
+            result.removeLast()
+        }
+        guard result.count >= 3, abs(signedArea(result)) > 0.05 else { return [] }
+        return result
+    }
+
+    static func contains(_ point: SIMD2<Float>, _ polygon: [SIMD2<Float>], tolerance: Float = 0.08) -> Bool {
+        guard polygon.count >= 3 else { return true }
+        if distanceToEdge(point, polygon) <= tolerance { return true }
+        var inside = false
+        var previous = polygon.count - 1
+        for index in 0 ..< polygon.count {
+            let a = polygon[index]
+            let b = polygon[previous]
+            let crosses = (a.y > point.y) != (b.y > point.y)
+            if crosses {
+                let x = (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x
+                if point.x < x { inside.toggle() }
+            }
+            previous = index
+        }
+        return inside
+    }
+
+    /// Counter-clockwise triangles covering `polygon`. Empty when the outline cannot be split.
+    static func triangles(_ polygon: [SIMD2<Float>]) -> [(SIMD2<Float>, SIMD2<Float>, SIMD2<Float>)] {
+        var ring = cleaned(polygon)
+        guard ring.count >= 3 else { return [] }
+        if signedArea(ring) < 0 { ring.reverse() }
+        var indices = Array(ring.indices)
+        var result: [(SIMD2<Float>, SIMD2<Float>, SIMD2<Float>)] = []
+        var guardCount = ring.count * ring.count
+        while indices.count > 3 && guardCount > 0 {
+            guardCount -= 1
+            var clipped = false
+            for position in indices.indices {
+                let previous = indices[(position + indices.count - 1) % indices.count]
+                let current = indices[position]
+                let next = indices[(position + 1) % indices.count]
+                guard isEar(previous, current, next, indices: indices, ring: ring) else { continue }
+                result.append((ring[previous], ring[current], ring[next]))
+                indices.remove(at: position)
+                clipped = true
+                break
+            }
+            if !clipped { return [] }
+        }
+        if indices.count == 3 {
+            result.append((ring[indices[0]], ring[indices[1]], ring[indices[2]]))
+        }
+        return result
+    }
+
+    private static func signedArea(_ polygon: [SIMD2<Float>]) -> Float {
+        var area: Float = 0
+        for index in polygon.indices {
+            let next = polygon[(index + 1) % polygon.count]
+            area += polygon[index].x * next.y - next.x * polygon[index].y
+        }
+        return area * 0.5
+    }
+
+    private static func distanceToEdge(_ point: SIMD2<Float>, _ polygon: [SIMD2<Float>]) -> Float {
+        var best = Float.greatestFiniteMagnitude
+        for index in polygon.indices {
+            let a = polygon[index]
+            let b = polygon[(index + 1) % polygon.count]
+            let ab = b - a
+            let lengthSquared = simd_length_squared(ab)
+            let t = lengthSquared > 1e-8 ? max(0, min(1, simd_dot(point - a, ab) / lengthSquared)) : 0
+            best = min(best, simd_distance(point, a + ab * t))
+        }
+        return best
+    }
+
+    private static func isEar(_ previous: Int, _ current: Int, _ next: Int, indices: [Int], ring: [SIMD2<Float>]) -> Bool {
+        let a = ring[previous]
+        let b = ring[current]
+        let c = ring[next]
+        let cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+        guard cross > 1e-6 else { return false }
+        for index in indices where index != previous && index != current && index != next {
+            if pointInTriangle(ring[index], a, b, c) { return false }
+        }
+        return true
+    }
+
+    private static func pointInTriangle(_ point: SIMD2<Float>, _ a: SIMD2<Float>, _ b: SIMD2<Float>, _ c: SIMD2<Float>) -> Bool {
+        let ab = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x)
+        let bc = (c.x - b.x) * (point.y - b.y) - (c.y - b.y) * (point.x - b.x)
+        let ca = (a.x - c.x) * (point.y - c.y) - (a.y - c.y) * (point.x - c.x)
+        return (ab >= -1e-5 && bc >= -1e-5 && ca >= -1e-5) || (ab <= 1e-5 && bc <= 1e-5 && ca <= 1e-5)
+    }
+}
+
 // MARK: - Surfaces to color
 
 /// A RoomPlan surface or object, copied out of `CapturedRoom` so baking can run off the main actor.
@@ -398,6 +505,46 @@ struct BakeSurface: Sendable {
     let parentIdentifier: String?
     /// Open doors and openings are holes you can see through.
     let isPassable: Bool
+    /// Floor outline in the surface's local X/Y plane. Empty means the dimension rectangle.
+    /// RoomPlan's rectangle keeps running past walls; this polygon is the part inside the room.
+    let polygon: [SIMD2<Float>]
+
+    init(
+        identifier: String,
+        kind: Kind,
+        transform: simd_float4x4,
+        dimensions: SIMD3<Float>,
+        parentIdentifier: String?,
+        isPassable: Bool,
+        polygon: [SIMD2<Float>] = []
+    ) {
+        self.identifier = identifier
+        self.kind = kind
+        self.transform = transform
+        self.dimensions = dimensions
+        self.parentIdentifier = parentIdentifier
+        self.isPassable = isPassable
+        self.polygon = polygon
+    }
+
+    /// True when a floor texel belongs to the scanned outline. Other surfaces use their whole rectangle.
+    func containsLocal(_ point: SIMD2<Float>) -> Bool {
+        guard kind == .floor, polygon.count >= 3 else { return true }
+        return FloorOutline.contains(point, polygon)
+    }
+
+    /// A point on this floor that is inside the outline, used to decide which side of a wall is the room.
+    var interiorLocal: SIMD2<Float> {
+        guard polygon.count >= 3 else { return .zero }
+        let centroid = polygon.reduce(SIMD2<Float>.zero, +) / Float(polygon.count)
+        if FloorOutline.contains(centroid, polygon, tolerance: 0.02) { return centroid }
+        return .zero
+    }
+
+    func worldPoint(_ local: SIMD2<Float>) -> SIMD3<Float> {
+        let point = transform * SIMD4<Float>(local.x, local.y, 0, 1)
+        return SIMD3(point.x, point.y, point.z)
+    }
 
     static func all(
         in room: CapturedRoom,
@@ -413,7 +560,8 @@ struct BakeSurface: Sendable {
                 transform: item.transform,
                 dimensions: item.dimensions,
                 parentIdentifier: item.parentIdentifier?.uuidString,
-                isPassable: passable
+                isPassable: passable,
+                polygon: kind == .floor ? FloorOutline.cleaned(item.polygonCorners.map { SIMD2($0.x, $0.y) }) : []
             )
         }
         var result = room.walls.map { surface($0, .wall) }
@@ -449,13 +597,20 @@ struct BakeSurface: Sendable {
     static func from(_ features: ScanFeatures) -> [BakeSurface] {
         func surface(_ item: ScanFeatureSurface, _ kind: Kind) -> BakeSurface? {
             guard let transform = scanTransform(item.transformColumnMajor), item.dimensions.count == 3 else { return nil }
+            let outline = kind == .floor
+                ? FloorOutline.cleaned(item.polygonCorners.compactMap { corner in
+                    guard corner.count >= 2, corner[0].isFinite, corner[1].isFinite else { return nil }
+                    return SIMD2(corner[0], corner[1])
+                })
+                : []
             return BakeSurface(
                 identifier: item.identifier,
                 kind: kind,
                 transform: transform,
                 dimensions: SIMD3(item.dimensions[0], item.dimensions[1], item.dimensions[2]),
                 parentIdentifier: item.parentIdentifier,
-                isPassable: kind == .opening || item.category == "door-open"
+                isPassable: kind == .opening || item.category == "door-open",
+                polygon: outline
             )
         }
         var result = features.walls.compactMap { surface($0, .wall) }
@@ -528,7 +683,7 @@ struct SurfaceColorBakeResult: Sendable {
 // MARK: - Baking
 
 /// Projects the recorded photos onto every visible face of the final RoomPlan model, rejecting views that are
-/// blocked (LiDAR depth, or the room geometry when depth is unavailable), and selects the best view per texel.
+/// blocked (LiDAR depth, or the room geometry when depth is unavailable), and blends the views that agree.
 enum SurfaceColorBaker {
     static let maxTexels = 4_000_000  // Increased from 3M for finer detail
     static let minTexelMeters: Float = 0.010  // Reduced from 1.5cm to 1.0cm for sharper textures
@@ -545,80 +700,39 @@ enum SurfaceColorBaker {
         progress: @escaping @Sendable (Double) -> Void
     ) -> SurfaceColorBakeResult? {
         guard !keyframes.isEmpty else { return nil }
-        let (faces, texelMeters) = makeFaces(surfaces)
+        var (faces, texelMeters) = makeFaces(surfaces)
         guard let last = faces.last else { return nil }
         let texelCount = last.offset + last.columns * last.rows
-        
-        // Changed from weighted average to best-view selection
-        // Store (color, weight, frame index) for each texel to pick the best view
-        var bestViews = [(color: SIMD3<Float>, weight: Float, frameIndex: Int)](
-            repeating: (SIMD3<Float>.zero, 0, -1), 
-            count: texelCount
-        )
-        
+        // rgb is the weighted sum; w is the total weight. Divided in finish().
+        var accumulation = [SIMD4<Float>](repeating: .zero, count: texelCount)
+
         let occluders = makeOccluders(surfaces)
         let toLinear = (0 ..< 256).map { srgbToLinear(Float($0) / 255) }
         var usedDepth = false
-        
-        // Try to create Metal projector for GPU acceleration
-        let metalProjector = MetalSurfaceProjector.create()
-        if metalProjector != nil {
-            print("[SurfaceColorBaker] Using Metal GPU acceleration")
-        } else {
-            print("[SurfaceColorBaker] Using CPU fallback (Metal unavailable)")
-        }
+        markFloorFootprint(&faces, surfaces: surfaces, occluders: occluders)
 
         for (index, keyframe) in keyframes.enumerated() {
             autoreleasepool {
                 guard let frame = FrameData(keyframe, anchorTransforms: anchorTransforms) else { return }
                 if frame.depth != nil { usedDepth = true }
-                
-                bestViews.withUnsafeMutableBufferPointer { buffer in
+                accumulation.withUnsafeMutableBufferPointer { buffer in
                     let target = buffer
-                    
-                    // Try Metal path first, fall back to CPU if it fails
-                    var usedMetal = false
-                    if let projector = metalProjector {
-                        usedMetal = projector.project(
-                            faces: faces,
-                            frameData: frame,
-                            frameIndex: index,
+                    // Faces own disjoint texel ranges, so one thread per face does not race.
+                    DispatchQueue.concurrentPerform(iterations: faces.count) { faceIndex in
+                        project(
+                            face: faces[faceIndex],
+                            frame: frame,
                             occluders: occluders,
+                            toLinear: toLinear,
                             into: target
                         )
                     }
-                    
-                    // CPU fallback
-                    if !usedMetal {
-                        DispatchQueue.concurrentPerform(iterations: faces.count) { faceIndex in
-                            projectBestView(
-                                face: faces[faceIndex], 
-                                frame: frame, 
-                                frameIndex: index,
-                                occluders: occluders, 
-                                toLinear: toLinear, 
-                                into: target
-                            )
-                        }
-                    }
                 }
             }
-            progress(Double(index + 1) / Double(keyframes.count) * 0.85)
+            progress(Double(index + 1) / Double(keyframes.count) * 0.9)
         }
-        
-        // Compute exposure normalization gains from overlapping views
-        progress(0.87)
-        let exposureGains = computeExposureGains(keyframes: keyframes, bestViews: bestViews, faces: faces)
-        
-        // Apply exposure normalization to best views
-        progress(0.90)
-        applyExposureNormalization(bestViews: &bestViews, gains: exposureGains)
-        
-        // Apply seam leveling between adjacent faces
-        progress(0.92)
-        let seamLeveled = applySeamLeveling(faces: faces, bestViews: bestViews, surfaces: surfaces)
 
-        let finished = finish(faces: faces, bestViews: seamLeveled)
+        let finished = finish(faces: faces, accumulation: accumulation)
         progress(0.95)
         guard let atlas = packAtlas(finished) else { return nil }
         progress(1)
@@ -683,13 +797,27 @@ enum SurfaceColorBaker {
         var columns = 0
         var rows = 0
         var offset = 0
+        /// Texels that belong to the floor inside the walls. Empty means the whole rectangle counts.
+        var inside: [Bool] = []
 
         var radius: Float { 0.5 * (width * width + height * height).squareRoot() }
+
+        func counts(_ localIndex: Int) -> Bool {
+            inside.isEmpty || (localIndex >= 0 && localIndex < inside.count && inside[localIndex])
+        }
 
         func point(column: Int, row: Int) -> SIMD3<Float> {
             let u = (Float(column) + 0.5) / Float(columns) - 0.5
             let v = 0.5 - (Float(row) + 0.5) / Float(rows)
             return center + uAxis * (u * width) + vAxis * (v * height)
+        }
+
+        /// Surface-local X/Y. `nz` runs U along -X, so the outline has to be flipped back.
+        func surfaceLocal(column: Int, row: Int) -> SIMD2<Float> {
+            let u = (Float(column) + 0.5) / Float(columns) - 0.5
+            let v = 0.5 - (Float(row) + 0.5) / Float(rows)
+            let x = (name == "nz" || name == "nx") ? -u * width : u * width
+            return SIMD2(x, v * height)
         }
     }
 
@@ -735,6 +863,40 @@ enum SurfaceColorBaker {
             offset += faces[index].columns * faces[index].rows
         }
         return (faces, texel)
+    }
+
+    /// Drops floor texels that sit outside the room outline or on the far side of a wall.
+    /// Those texels never get a photo, and counting them makes the real floor look uncolored.
+    private static func markFloorFootprint(_ faces: inout [Face], surfaces: [BakeSurface], occluders: [Occluder]) {
+        for index in faces.indices {
+            let face = faces[index]
+            let surface = surfaces[face.surfaceIndex]
+            guard surface.kind == .floor else { continue }
+            let interior = surface.worldPoint(surface.interiorLocal)
+            let count = face.columns * face.rows
+            var onOutline = [Bool](repeating: false, count: count)
+            var inRoom = [Bool](repeating: false, count: count)
+            for row in 0 ..< face.rows {
+                for column in 0 ..< face.columns {
+                    let localIndex = row * face.columns + column
+                    guard surface.containsLocal(face.surfaceLocal(column: column, row: row)) else { continue }
+                    onOutline[localIndex] = true
+                    let world = face.point(column: column, row: row)
+                    let travel = world - interior
+                    let distance = simd_length(travel)
+                    let blocked = distance > 0.2 && occluders.contains { occluder in
+                        occluder.planar && occluder.occluderID != face.occluderID &&
+                            occluder.hits(origin: interior, direction: travel / distance, maxT: distance - 0.2)
+                    }
+                    inRoom[localIndex] = !blocked
+                }
+            }
+            if inRoom.contains(true) {
+                faces[index].inside = inRoom
+            } else if onOutline.contains(true) {
+                faces[index].inside = onOutline
+            }
+        }
     }
 
     /// Step occluders must not share ids with surface indexes, which start at 0.
@@ -904,13 +1066,12 @@ enum SurfaceColorBaker {
         }
     }
 
-    private static func projectBestView(
+    private static func project(
         face: Face,
         frame: FrameData,
-        frameIndex: Int,
         occluders: [Occluder],
         toLinear: [Float],
-        into bestViews: UnsafeMutableBufferPointer<(color: SIMD3<Float>, weight: Float, frameIndex: Int)>
+        into accumulation: UnsafeMutableBufferPointer<SIMD4<Float>>
     ) {
         let camera = frame.cameraPosition
         let toCamera = camera - face.center
@@ -927,9 +1088,17 @@ enum SurfaceColorBaker {
         let width = Float(frame.width)
         let height = Float(frame.height)
         let edgeScale = 0.12 * min(width, height)
+        // Pixel values already include exposure duration. exposureOffset is only the residual
+        // versus the camera's target, in stops. A wide gain here repaints whole photos.
+        let exposureGain: Float = frame.exposureOffset.isFinite
+            ? min(1.35, max(0.75, exp2(-frame.exposureOffset)))
+            : 1
+        let sharpnessBoost: Float = 1 + min(1, frame.sharpness / 2000)
 
         for row in 0 ..< face.rows {
             for column in 0 ..< face.columns {
+                let localIndex = row * face.columns + column
+                guard face.counts(localIndex) else { continue }
                 let point = face.point(column: column, row: row)
                 let ray = point - camera
                 let distance = simd_length(ray)
@@ -944,37 +1113,34 @@ enum SurfaceColorBaker {
                 let py = frame.focal.y * -local.y / z + frame.principal.y
                 guard px >= 1, py >= 1, px < width - 2, py < height - 2 else { continue }
 
-                if let depth = frame.depth, let confidence = frame.depthConfidence {
+                if let depth = frame.depth {
                     let dx = min(frame.depthWidth - 1, Int(px * Float(frame.depthWidth) / width))
                     let dy = min(frame.depthHeight - 1, Int(py * Float(frame.depthHeight) / height))
                     let depthIndex = dy * frame.depthWidth + dx
                     let measured = depth[depthIndex]
-                    let conf = confidence[depthIndex]
-                    
-                    // Only use high-confidence depth (2 = high, 1 = medium, 0 = low)
-                    if measured.isFinite, measured > 0, conf >= 2 {
+                    // 0 = low, 1 = medium, 2 = high. A missing map means trust the depth.
+                    // Low-confidence hits are speckle, so they do not contribute a color.
+                    let confidence = frame.depthConfidence?[depthIndex] ?? 2
+                    if confidence == 0 { continue }
+                    if measured.isFinite, measured > 0 {
                         if measured < z - max(0.05, 0.03 * z) { continue }   // something stands in front
-                        // Tightened tolerance: was +25cm/10%, now +8cm/4% to reduce off-box clutter
-                        if measured > z + max(0.08, 0.04 * z) { continue }   // the surface isn't really there
+                        // RoomPlan planes sit centimeters off the LiDAR hit. Rejecting anything
+                        // farther than 8cm deleted most floor and wall samples, and the holes
+                        // filled in from whichever photo happened to agree.
+                        if measured > z + max(0.20, 0.10 * z) { continue }
                     }
                 } else if blockers.contains(where: { $0.hits(origin: camera, direction: ray / distance, maxT: distance - 0.12) }) {
                     continue
                 }
 
-                let color = sample(frame, x: px, y: py, toLinear: toLinear)
+                let color = sample(frame, x: px, y: py, toLinear: toLinear) * exposureGain
                 let edge = min(1, min(min(px, width - px), min(py, height - py)) / edgeScale)
                 let base = cosine * cosine / max(distance * distance, 0.25) * (0.25 + 0.75 * edge)
-                
-                // Weight includes sharpness: prefer sharp, head-on, close views
-                // Sharpness is variance of Laplacian, typically 0-10000+; normalize to ~0-1 range
-                let sharpnessBoost = 1.0 + min(1.0, frame.sharpness / 2000.0)
+                // Squaring still prefers a close, head-on photo. Near-ties blend instead of
+                // switching color from one texel to the next.
                 let weight = base * base * sharpnessBoost
-                
                 let texelIndex = face.offset + row * face.columns + column
-                // Best-view selection: keep only the highest-weight view per texel
-                if weight > bestViews[texelIndex].weight {
-                    bestViews[texelIndex] = (color, weight, frameIndex)
-                }
+                accumulation[texelIndex] += SIMD4<Float>(color * weight, weight)
             }
         }
     }
@@ -1046,19 +1212,23 @@ enum SurfaceColorBaker {
         let seenTexels: Int
     }
 
-    private static func finish(faces: [Face], bestViews: [(color: SIMD3<Float>, weight: Float, frameIndex: Int)]) -> [FinishedFace] {
+    private static func finish(faces: [Face], accumulation: [SIMD4<Float>]) -> [FinishedFace] {
         faces.map { face in
             let count = face.columns * face.rows
             var texels = [SIMD3<Float>](repeating: .zero, count: count)
             var filled = [Bool](repeating: false, count: count)
             var sum = SIMD3<Float>.zero
             var seen = 0
+            var counted = 0
             for index in 0 ..< count {
-                let view = bestViews[face.offset + index]
-                guard view.weight > 0 else { continue }
-                texels[index] = view.color
+                guard face.counts(index) else { continue }
+                counted += 1
+                let value = accumulation[face.offset + index]
+                guard value.w > 0 else { continue }
+                let color = SIMD3<Float>(value.x, value.y, value.z) / value.w
+                texels[index] = color
                 filled[index] = true
-                sum += view.color
+                sum += color
                 seen += 1
             }
             guard seen > 0 else {
@@ -1066,14 +1236,14 @@ enum SurfaceColorBaker {
             }
             let average = sum / Float(seen)
 
-            // Grow seen texels into unseen gaps, then fall back to the face's average color.
+            // Grow seen texels into unseen gaps inside the room, then fall back to the face's average color.
             for _ in 0 ..< 24 {
                 var grew = false
                 var next = filled
                 for row in 0 ..< face.rows {
                     for column in 0 ..< face.columns {
                         let index = row * face.columns + column
-                        guard !filled[index] else { continue }
+                        guard face.counts(index), !filled[index] else { continue }
                         var neighborSum = SIMD3<Float>.zero
                         var neighbors = 0
                         for (dc, dr) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
@@ -1081,7 +1251,7 @@ enum SurfaceColorBaker {
                             let r = row + dr
                             guard c >= 0, r >= 0, c < face.columns, r < face.rows else { continue }
                             let n = r * face.columns + c
-                            if filled[n] {
+                            if face.counts(n), filled[n] {
                                 neighborSum += texels[n]
                                 neighbors += 1
                             }
@@ -1096,8 +1266,10 @@ enum SurfaceColorBaker {
                 filled = next
                 if !grew { break }
             }
-            for index in 0 ..< count where !filled[index] { texels[index] = average }
-            return FinishedFace(face: face, texels: texels, averageColor: average, coverage: Float(seen) / Float(count), seenTexels: seen)
+            for index in 0 ..< count where face.counts(index) && !filled[index] { texels[index] = average }
+            for index in 0 ..< count where !face.counts(index) { texels[index] = average }
+            let coverage = counted > 0 ? Float(seen) / Float(counted) : 0
+            return FinishedFace(face: face, texels: texels, averageColor: average, coverage: coverage, seenTexels: seen)
         }
     }
 
@@ -1173,296 +1345,5 @@ enum SurfaceColorBaker {
     private static func linearToSRGB(_ l: Float) -> Float {
         let c = max(0, min(1, l))
         return c <= 0.0031308 ? 12.92 * c : 1.055 * pow(c, 1 / 2.4) - 0.055
-    }
-    
-    // MARK: - Exposure Normalization
-    
-    /// Compute per-frame gain factors to normalize exposure across all keyframes.
-    /// Uses a reference frame (median exposure) and solves for relative gains based on overlapping texels.
-    private static func computeExposureGains(
-        keyframes: [ColorKeyframe],
-        bestViews: [(color: SIMD3<Float>, weight: Float, frameIndex: Int)],
-        faces: [Face]
-    ) -> [Float] {
-        guard keyframes.count > 1 else { return [1.0] }
-        
-        // Collect exposure durations to find median (reference frame)
-        let exposures = keyframes.map { $0.exposureDuration }
-        let sortedExposures = exposures.sorted()
-        let medianExposure = sortedExposures[sortedExposures.count / 2]
-        let referenceFrame = exposures.firstIndex(of: medianExposure) ?? 0
-        
-        // Build a graph of overlapping views: which frames see which texels
-        var frameOverlaps: [[Int]] = Array(repeating: [], count: keyframes.count)
-        var texelsPerFrame: [Int] = Array(repeating: 0, count: keyframes.count)
-        
-        for face in faces {
-            for row in 0 ..< face.rows {
-                for column in 0 ..< face.columns {
-                    let texelIndex = face.offset + row * face.columns + column
-                    let view = bestViews[texelIndex]
-                    guard view.weight > 0, view.frameIndex >= 0 else { continue }
-                    texelsPerFrame[view.frameIndex] += 1
-                }
-            }
-        }
-        
-        // Initial gains based on exposure duration relative to reference
-        var gains = keyframes.enumerated().map { index, keyframe -> Float in
-            let ratio = keyframe.exposureDuration / max(0.001, keyframes[referenceFrame].exposureDuration)
-            return 1.0 / max(0.1, min(10.0, ratio))
-        }
-        gains[referenceFrame] = 1.0
-        
-        // Iterative refinement: adjust gains based on brightness differences in overlapping regions
-        // This is a simplified version; full implementation would solve a sparse linear system
-        for iteration in 0 ..< 5 {
-            var newGains = gains
-            var frameBrightness: [Float] = Array(repeating: 0, count: keyframes.count)
-            var frameWeights: [Float] = Array(repeating: 0, count: keyframes.count)
-            
-            // Measure average brightness per frame
-            for face in faces {
-                for row in 0 ..< face.rows {
-                    for column in 0 ..< face.columns {
-                        let texelIndex = face.offset + row * face.columns + column
-                        let view = bestViews[texelIndex]
-                        guard view.weight > 0, view.frameIndex >= 0 else { continue }
-                        let luma = 0.299 * view.color.x + 0.587 * view.color.y + 0.114 * view.color.z
-                        frameBrightness[view.frameIndex] += luma * gains[view.frameIndex]
-                        frameWeights[view.frameIndex] += 1
-                    }
-                }
-            }
-            
-            // Compute target brightness (median of all frames)
-            var validBrightness: [Float] = []
-            for i in 0 ..< keyframes.count where frameWeights[i] > 10 {
-                validBrightness.append(frameBrightness[i] / frameWeights[i])
-            }
-            guard !validBrightness.isEmpty else { break }
-            validBrightness.sort()
-            let targetBrightness = validBrightness[validBrightness.count / 2]
-            
-            // Adjust gains to match target brightness
-            for i in 0 ..< keyframes.count where frameWeights[i] > 10 {
-                let currentBrightness = frameBrightness[i] / frameWeights[i]
-                if currentBrightness > 0.01 {
-                    let adjustment = targetBrightness / currentBrightness
-                    newGains[i] = gains[i] * adjustment
-                    // Clamp to reasonable range
-                    newGains[i] = max(0.2, min(5.0, newGains[i]))
-                }
-            }
-            newGains[referenceFrame] = 1.0
-            
-            gains = newGains
-        }
-        
-        return gains
-    }
-    
-    /// Apply exposure gains to normalize brightness across all views.
-    private static func applyExposureNormalization(
-        bestViews: inout [(color: SIMD3<Float>, weight: Float, frameIndex: Int)],
-        gains: [Float]
-    ) {
-        for index in 0 ..< bestViews.count {
-            let view = bestViews[index]
-            guard view.weight > 0, view.frameIndex >= 0, view.frameIndex < gains.count else { continue }
-            let gain = gains[view.frameIndex]
-            bestViews[index].color = SIMD3<Float>(
-                min(1.0, view.color.x * gain),
-                min(1.0, view.color.y * gain),
-                min(1.0, view.color.z * gain)
-            )
-        }
-    }
-    
-    // MARK: - Seam Leveling
-    
-    /// Apply seam leveling to reduce visible color discontinuities between adjacent faces.
-    /// Uses a simple gain-adjustment approach along shared edges.
-    private static func applySeamLeveling(
-        faces: [Face],
-        bestViews: [(color: SIMD3<Float>, weight: Float, frameIndex: Int)],
-        surfaces: [BakeSurface]
-    ) -> [(color: SIMD3<Float>, weight: Float, frameIndex: Int)] {
-        var result = bestViews
-        
-        // Find adjacent faces (faces of the same surface)
-        var surfaceFaces: [[Int]] = Array(repeating: [], count: surfaces.count)
-        for (index, face) in faces.enumerated() {
-            surfaceFaces[face.surfaceIndex].append(index)
-        }
-        
-        // For each surface with multiple faces, level seams between them
-        for faceIndices in surfaceFaces where faceIndices.count > 1 {
-            // Level seams between all pairs of faces on this surface
-            for i in 0 ..< faceIndices.count {
-                for j in (i + 1) ..< faceIndices.count {
-                    levelSeamBetween(
-                        faceA: faces[faceIndices[i]],
-                        faceB: faces[faceIndices[j]],
-                        bestViews: &result
-                    )
-                }
-            }
-        }
-        
-        return result
-    }
-    
-    /// Level the seam between two faces by adjusting edge pixels to minimize brightness differences.
-    private static func levelSeamBetween(
-        faceA: Face,
-        faceB: Face,
-        bestViews: inout [(color: SIMD3<Float>, weight: Float, frameIndex: Int)]
-    ) {
-        // Check if faces are adjacent (share an edge)
-        // Simplified: adjust edges of both faces toward each other
-        
-        // Collect edge samples from both faces
-        var edgeSamplesA: [(index: Int, color: SIMD3<Float>)] = []
-        var edgeSamplesB: [(index: Int, color: SIMD3<Float>)] = []
-        
-        // Sample edges of face A
-        for column in 0 ..< faceA.columns {
-            // Top edge
-            let topIndex = faceA.offset + column
-            if bestViews[topIndex].weight > 0 {
-                edgeSamplesA.append((topIndex, bestViews[topIndex].color))
-            }
-            // Bottom edge
-            let bottomIndex = faceA.offset + (faceA.rows - 1) * faceA.columns + column
-            if bestViews[bottomIndex].weight > 0 {
-                edgeSamplesA.append((bottomIndex, bestViews[bottomIndex].color))
-            }
-        }
-        for row in 0 ..< faceA.rows {
-            // Left edge
-            let leftIndex = faceA.offset + row * faceA.columns
-            if bestViews[leftIndex].weight > 0 {
-                edgeSamplesA.append((leftIndex, bestViews[leftIndex].color))
-            }
-            // Right edge
-            let rightIndex = faceA.offset + row * faceA.columns + (faceA.columns - 1)
-            if bestViews[rightIndex].weight > 0 {
-                edgeSamplesA.append((rightIndex, bestViews[rightIndex].color))
-            }
-        }
-        
-        // Sample edges of face B
-        for column in 0 ..< faceB.columns {
-            let topIndex = faceB.offset + column
-            if bestViews[topIndex].weight > 0 {
-                edgeSamplesB.append((topIndex, bestViews[topIndex].color))
-            }
-            let bottomIndex = faceB.offset + (faceB.rows - 1) * faceB.columns + column
-            if bestViews[bottomIndex].weight > 0 {
-                edgeSamplesB.append((bottomIndex, bestViews[bottomIndex].color))
-            }
-        }
-        for row in 0 ..< faceB.rows {
-            let leftIndex = faceB.offset + row * faceB.columns
-            if bestViews[leftIndex].weight > 0 {
-                edgeSamplesB.append((leftIndex, bestViews[leftIndex].color))
-            }
-            let rightIndex = faceB.offset + row * faceB.columns + (faceB.columns - 1)
-            if bestViews[rightIndex].weight > 0 {
-                edgeSamplesB.append((rightIndex, bestViews[rightIndex].color))
-            }
-        }
-        
-        guard !edgeSamplesA.isEmpty, !edgeSamplesB.isEmpty else { return }
-        
-        // Compute average edge brightness for both faces
-        let avgBrightnessA = edgeSamplesA.reduce(Float(0)) { sum, sample in
-            sum + (0.299 * sample.color.x + 0.587 * sample.color.y + 0.114 * sample.color.z)
-        } / Float(edgeSamplesA.count)
-        
-        let avgBrightnessB = edgeSamplesB.reduce(Float(0)) { sum, sample in
-            sum + (0.299 * sample.color.x + 0.587 * sample.color.y + 0.114 * sample.color.z)
-        } / Float(edgeSamplesB.count)
-        
-        guard avgBrightnessA > 0.01, avgBrightnessB > 0.01 else { return }
-        
-        // Compute target brightness (average of both)
-        let targetBrightness = (avgBrightnessA + avgBrightnessB) / 2
-        
-        // Apply gentle gain adjustment to edges (70% toward target, 30% original)
-        let gainA = 0.7 * (targetBrightness / avgBrightnessA) + 0.3
-        let gainB = 0.7 * (targetBrightness / avgBrightnessB) + 0.3
-        
-        // Clamp gains to avoid extreme adjustments
-        let clampedGainA = max(0.85, min(1.15, gainA))
-        let clampedGainB = max(0.85, min(1.15, gainB))
-        
-        // Apply gains to edge pixels with feathering (stronger at edge, weaker inside)
-        let featherWidth = 3
-        
-        // Feather face A edges
-        for row in 0 ..< min(featherWidth, faceA.rows) {
-            let feather = Float(featherWidth - row) / Float(featherWidth)
-            let gain = 1.0 + (clampedGainA - 1.0) * feather
-            for column in 0 ..< faceA.columns {
-                let index = faceA.offset + row * faceA.columns + column
-                applyGain(to: &bestViews[index], gain: gain)
-                
-                let bottomRow = faceA.rows - 1 - row
-                let bottomIndex = faceA.offset + bottomRow * faceA.columns + column
-                applyGain(to: &bestViews[bottomIndex], gain: gain)
-            }
-        }
-        for column in 0 ..< min(featherWidth, faceA.columns) {
-            let feather = Float(featherWidth - column) / Float(featherWidth)
-            let gain = 1.0 + (clampedGainA - 1.0) * feather
-            for row in 0 ..< faceA.rows {
-                let index = faceA.offset + row * faceA.columns + column
-                applyGain(to: &bestViews[index], gain: gain)
-                
-                let rightColumn = faceA.columns - 1 - column
-                let rightIndex = faceA.offset + row * faceA.columns + rightColumn
-                applyGain(to: &bestViews[rightIndex], gain: gain)
-            }
-        }
-        
-        // Feather face B edges
-        for row in 0 ..< min(featherWidth, faceB.rows) {
-            let feather = Float(featherWidth - row) / Float(featherWidth)
-            let gain = 1.0 + (clampedGainB - 1.0) * feather
-            for column in 0 ..< faceB.columns {
-                let index = faceB.offset + row * faceB.columns + column
-                applyGain(to: &bestViews[index], gain: gain)
-                
-                let bottomRow = faceB.rows - 1 - row
-                let bottomIndex = faceB.offset + bottomRow * faceB.columns + column
-                applyGain(to: &bestViews[bottomIndex], gain: gain)
-            }
-        }
-        for column in 0 ..< min(featherWidth, faceB.columns) {
-            let feather = Float(featherWidth - column) / Float(featherWidth)
-            let gain = 1.0 + (clampedGainB - 1.0) * feather
-            for row in 0 ..< faceB.rows {
-                let index = faceB.offset + row * faceB.columns + column
-                applyGain(to: &bestViews[index], gain: gain)
-                
-                let rightColumn = faceB.columns - 1 - column
-                let rightIndex = faceB.offset + row * faceB.columns + rightColumn
-                applyGain(to: &bestViews[rightIndex], gain: gain)
-            }
-        }
-    }
-    
-    private static func applyGain(
-        to view: inout (color: SIMD3<Float>, weight: Float, frameIndex: Int),
-        gain: Float
-    ) {
-        guard view.weight > 0 else { return }
-        view.color = SIMD3<Float>(
-            min(1.0, view.color.x * gain),
-            min(1.0, view.color.y * gain),
-            min(1.0, view.color.z * gain)
-        )
     }
 }

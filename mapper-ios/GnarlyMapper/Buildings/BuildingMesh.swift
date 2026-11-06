@@ -119,7 +119,7 @@ enum BuildingMesh {
                 let window = slabNode(surface, colors: byID[surface.identifier], atlas: atlas, depth: max(abs(surface.dimensions.z), 0.02), transparency: 0.55)
                 root.addChildNode(window)
             case .floor:
-                root.addChildNode(slabNode(surface, colors: byID[surface.identifier], atlas: atlas, depth: max(abs(surface.dimensions.z), 0.05)))
+                root.addChildNode(floorNode(surface, colors: byID[surface.identifier], atlas: atlas))
             case .object:
                 root.addChildNode(objectNode(surface, colors: byID[surface.identifier], atlas: atlas))
             case .stairs:
@@ -309,6 +309,78 @@ enum BuildingMesh {
         ))
         addRim(to: node, minX: -d.x / 2, maxX: d.x / 2, minY: -d.y / 2, maxY: d.y / 2, depth: depth, color: edge, holes: [], outward: true)
         return node
+    }
+
+    /// The floor outline, not the bounding rectangle. The rectangle runs out past the walls.
+    private static func floorNode(_ surface: BakeSurface, colors: SurfaceColorDocument.Surface?, atlas: UIImage?) -> SCNNode {
+        let triangles = FloorOutline.triangles(surface.polygon)
+        guard !triangles.isEmpty else {
+            return slabNode(surface, colors: colors, atlas: atlas, depth: max(abs(surface.dimensions.z), 0.05))
+        }
+        let node = SCNNode()
+        node.simdTransform = surface.transform
+        let d = simd_abs(surface.dimensions)
+        let depth = max(d.z, 0.05)
+        let size = SIMD2<Float>(d.x, d.y)
+        let front = colors?.faces.first { $0.face == "pz" }
+        let back = colors?.faces.first { $0.face == "nz" }
+        let frontColor = uiColor(front, fallback: SurfacePalette.color(for: .floor))
+        let edge = shade(frontColor, 0.82)
+        node.addChildNode(floorCap(triangles, z: depth / 2, faceName: "pz", size: size, face: front, atlas: atlas, fallback: frontColor, upward: true))
+        node.addChildNode(floorCap(triangles, z: -depth / 2, faceName: "nz", size: size, face: back, atlas: atlas, fallback: uiColor(back, fallback: frontColor), upward: false))
+        let ring = FloorOutline.cleaned(surface.polygon)
+        for index in ring.indices {
+            let a = ring[index]
+            let b = ring[(index + 1) % ring.count]
+            node.addChildNode(floorEdge(a, b, depth: depth, color: edge))
+        }
+        return node
+    }
+
+    private static func floorCap(
+        _ triangles: [(SIMD2<Float>, SIMD2<Float>, SIMD2<Float>)],
+        z: Float,
+        faceName: String,
+        size: SIMD2<Float>,
+        face: SurfaceColorDocument.Face?,
+        atlas: UIImage?,
+        fallback: UIColor,
+        upward: Bool
+    ) -> SCNNode {
+        let textured = usesAtlas(face, atlas: atlas)
+        var positions: [SCNVector3] = []
+        var normals: [SCNVector3] = []
+        var uvs: [CGPoint] = []
+        var indices: [Int32] = []
+        let normal = SCNVector3(0, 0, upward ? 1 : -1)
+        for triangle in triangles {
+            let corners = upward ? [triangle.0, triangle.1, triangle.2] : [triangle.0, triangle.2, triangle.1]
+            let base = Int32(positions.count)
+            for corner in corners {
+                positions.append(SCNVector3(corner.x, corner.y, z))
+                normals.append(normal)
+                if textured, let face, let rect = face.rect, let atlas {
+                    uvs.append(atlasPoint(bakerUV(localX: corner.x, localY: corner.y, face: faceName, size: size), rect: rect, atlas: atlas))
+                } else {
+                    uvs.append(.zero)
+                }
+            }
+            indices.append(contentsOf: [base, base + 1, base + 2])
+        }
+        let sources = [
+            SCNGeometrySource(vertices: positions),
+            SCNGeometrySource(normals: normals),
+            SCNGeometrySource(textureCoordinates: uvs),
+        ]
+        let geometry = SCNGeometry(sources: sources, elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
+        geometry.materials = [textured ? textureMaterial(atlas!, transparency: 1) : solidMaterial(fallback)]
+        return SCNNode(geometry: geometry)
+    }
+
+    private static func floorEdge(_ a: SIMD2<Float>, _ b: SIMD2<Float>, depth: Float, color: UIColor) -> SCNNode {
+        let z = depth / 2
+        let corners = [SIMD3(a.x, a.y, -z), SIMD3(b.x, b.y, -z), SIMD3(b.x, b.y, z), SIMD3(a.x, a.y, z)]
+        return quad(corners: corners, uvs: [.zero, .zero, .zero, .zero], material: solidMaterial(color))
     }
 
     /// Treads and risers take the photo splat. The other faces of each one-riser block stay a solid color.

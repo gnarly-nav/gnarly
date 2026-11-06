@@ -27,27 +27,36 @@ struct ScanPlan: Equatable {
 
     init(room: CapturedRoom) {
         var shapes: [Shape] = []
-        shapes += room.floors.map { Shape(kind: .floor, corners: Self.surfaceFootprint($0, floorPlane: true)) }
-        shapes += room.walls.map { Shape(kind: .wall, corners: Self.surfaceFootprint($0, floorPlane: false)) }
-        shapes += room.doors.map { Shape(kind: .door, corners: Self.surfaceFootprint($0, floorPlane: false)) }
-        shapes += room.openings.map { Shape(kind: .opening, corners: Self.surfaceFootprint($0, floorPlane: false)) }
-        shapes += room.windows.map { Shape(kind: .window, corners: Self.surfaceFootprint($0, floorPlane: false)) }
+        shapes += room.floors.map { Shape(kind: .floor, corners: Self.floorFootprint($0)) }
+        shapes += room.walls.map { Shape(kind: .wall, corners: Self.surfaceFootprint($0)) }
+        shapes += room.doors.map { Shape(kind: .door, corners: Self.surfaceFootprint($0)) }
+        shapes += room.openings.map { Shape(kind: .opening, corners: Self.surfaceFootprint($0)) }
+        shapes += room.windows.map { Shape(kind: .window, corners: Self.surfaceFootprint($0)) }
         shapes += room.objects
             .filter { $0.category == .stairs }
             .map { Shape(kind: .stairs, corners: Self.objectFootprint($0)) }
-        self.shapes = shapes.filter { $0.corners.count == 4 }
+        self.shapes = shapes.filter { $0.kind == .floor ? $0.corners.count >= 3 : $0.corners.count == 4 }
     }
 
-    private static func surfaceFootprint(_ surface: CapturedRoom.Surface, floorPlane: Bool) -> [SIMD2<Float>] {
-        if floorPlane {
-            return corners(
-                transform: surface.transform,
-                halfX: surface.dimensions.x * 0.5,
-                halfOther: surface.dimensions.y * 0.5,
-                otherIsLocalY: true
-            )
+    /// The outline RoomPlan clipped to the walls. The dimension rectangle keeps going past them.
+    private static func floorFootprint(_ surface: CapturedRoom.Surface) -> [SIMD2<Float>] {
+        let outline = FloorOutline.cleaned(surface.polygonCorners.map { SIMD2($0.x, $0.y) })
+        let local = outline.count >= 3
+            ? outline.map { SIMD3<Float>($0.x, $0.y, 0) }
+            : [
+                SIMD3<Float>(-surface.dimensions.x * 0.5, -surface.dimensions.y * 0.5, 0),
+                SIMD3(surface.dimensions.x * 0.5, -surface.dimensions.y * 0.5, 0),
+                SIMD3(surface.dimensions.x * 0.5, surface.dimensions.y * 0.5, 0),
+                SIMD3(-surface.dimensions.x * 0.5, surface.dimensions.y * 0.5, 0),
+            ]
+        return local.map { point in
+            let world = surface.transform * SIMD4<Float>(point.x, point.y, point.z, 1)
+            return SIMD2(world.x, world.z)
         }
-        return corners(
+    }
+
+    private static func surfaceFootprint(_ surface: CapturedRoom.Surface) -> [SIMD2<Float>] {
+        corners(
             transform: surface.transform,
             halfX: surface.dimensions.x * 0.5,
             halfOther: max(surface.dimensions.z, 0.08) * 0.5,

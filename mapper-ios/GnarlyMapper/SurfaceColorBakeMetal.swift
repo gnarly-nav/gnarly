@@ -2,8 +2,9 @@ import Metal
 import MetalKit
 import simd
 
-/// Metal-accelerated surface color projection.
-/// Falls back to CPU if Metal is unavailable or initialization fails.
+/// Unused GPU projection kernel. The live bake blends photos on the CPU.
+/// This kernel still keeps a single winning photo per texel, which is the
+/// floor and wall speckle the CPU path no longer produces, so `project` stays off.
 final class MetalSurfaceProjector {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
